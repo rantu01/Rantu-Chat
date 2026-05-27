@@ -1,57 +1,83 @@
 import crypto from "crypto";
 import dotenv from "dotenv";
-import fs from "fs";
-import path from "path";
-import { MongoClient } from "mongodb";
+import { MongoClient, type Collection, type Db } from "mongodb";
+import {
+  BufferJSON,
+  initAuthCreds,
+  proto,
+  type AuthenticationCreds,
+  type SignalDataSet,
+  type SignalKeyStore
+} from "@whiskeysockets/baileys";
 import { User, ChatMessage, LogEntry } from "../types";
 
+dotenv.config({ path: ".env.local" });
 dotenv.config();
 
-const DB_FILE = path.join(process.cwd(), "data", "db.json");
 const MONGODB_URI = process.env.MONGODB_URI?.trim();
-const MONGODB_DB_NAME = process.env.MONGODB_DB_NAME?.trim() || "whatsapp_gemini_agent";
+const MONGODB_DB_NAME = process.env.MONGODB_DB_NAME?.trim() || "rantuChat";
+
+const COLLECTIONS = {
+  users: "users",
+  chats: "chats",
+  logs: "logs",
+  whatsappAuthCreds: "whatsapp_auth_creds",
+  whatsappAuthKeys: "whatsapp_auth_keys"
+} as const;
 
 interface StoredUser extends User {
   passwordHash: string;
 }
 
-interface DBStructure {
-  users: StoredUser[];
-  chats: Record<string, ChatMessage[]>;
-  logs: Record<string, LogEntry[]>;
+interface ChatDocument {
+  userId: string;
+  messages: ChatMessage[];
 }
 
-interface FileSnapshot {
-  users: User[];
-  chats: Record<string, ChatMessage[]>;
-  logs: Record<string, LogEntry[]>;
-  credentials?: Record<string, string>;
+interface LogDocument {
+  userId: string;
+  entries: LogEntry[];
 }
 
-const emptySnapshot: DBStructure = {
-  users: [],
-  chats: {},
-  logs: {}
+interface WhatsAppAuthCredsDocument {
+  userId: string;
+  payload: string;
+  updatedAt: Date;
+}
+
+interface WhatsAppAuthKeyDocument {
+  userId: string;
+  keyType: string;
+  keyId: string;
+  payload: string | null;
+  updatedAt: Date;
+}
+
+const defaultSystemInstruction =
+  "You are an elegant, polite, and helpful personal WhatsApp auto-responder bot. Keep your replies concise, helpful, and natural, matching the style of message chat applications. Never use excessively long or formal paragraphs. Always write in a way suited to chat layouts.";
+
+const emptyState = {
+  users: [] as StoredUser[],
+  chats: {} as Record<string, ChatMessage[]>,
+  logs: {} as Record<string, LogEntry[]>
 };
 
-let cache: DBStructure = { ...emptySnapshot };
 let mongoClient: MongoClient | null = null;
+let database: Db | null = null;
 let initialized = false;
 let initPromise: Promise<void> | null = null;
-let persistQueue: Promise<void> = Promise.resolve();
+let cache = structuredClone(emptyState);
 
-function ensureDataDirectory() {
-  const directory = path.dirname(DB_FILE);
-  if (!fs.existsSync(directory)) {
-    fs.mkdirSync(directory, { recursive: true });
+function requireDatabase() {
+  if (!database) {
+    throw new Error("MongoDB has not been initialized yet. Call initializeDatabase() first.");
   }
+
+  return database;
 }
 
-function ensureFileExists() {
-  ensureDataDirectory();
-  if (!fs.existsSync(DB_FILE)) {
-    fs.writeFileSync(DB_FILE, JSON.stringify(emptySnapshot, null, 2), "utf-8");
-  }
+function getCollection<T>(name: string): Collection<T> {
+  return requireDatabase().collection<T>(name);
 }
 
 function normalizeUser(user: Partial<StoredUser> & Pick<StoredUser, "id" | "email" | "passwordHash">): StoredUser {
@@ -60,9 +86,7 @@ function normalizeUser(user: Partial<StoredUser> & Pick<StoredUser, "id" | "emai
     email: user.email,
     geminiApiKey: user.geminiApiKey ?? "",
     botName: user.botName ?? "Gemini Auto-Bot",
-    systemInstruction:
-      user.systemInstruction ??
-      "You are an elegant, polite, and helpful personal WhatsApp auto-responder bot. Keep your replies concise, helpful, and natural, matching the style of message chat applications. Never use excessively long or formal paragraphs. Always write in a way suited to chat layouts.",
+    systemInstruction: user.systemInstruction ?? defaultSystemInstruction,
     whatsappStatus: user.whatsappStatus ?? "Disconnected",
     whatsappNumber: user.whatsappNumber,
     qrUrl: user.qrUrl,
@@ -77,81 +101,50 @@ function toPublicUser(user: StoredUser): User {
   return publicUser;
 }
 
-function readFileSnapshot(): DBStructure {
-  ensureFileExists();
+function encodeMongoValue(value: unknown) {
+  return JSON.stringify(value, BufferJSON.replacer);
+}
 
-  try {
-    const raw = fs.readFileSync(DB_FILE, "utf-8");
-    const parsed = JSON.parse(raw) as FileSnapshot & { users?: Array<Partial<User> & { id: string }> };
-    const credentials = parsed.credentials || {};
+function decodeMongoValue<T>(value: string): T {
+  return JSON.parse(value, BufferJSON.reviver) as T;
+}
 
-    return {
-      users: (parsed.users || []).map((user) =>
-        normalizeUser({
-          ...(user as User),
-          id: user.id,
-          email: user.email,
-          passwordHash: credentials[user.id] || (user as any).passwordHash || ""
-        })
-      ),
-      chats: parsed.chats || {},
-      logs: parsed.logs || {}
-    };
-  } catch (error) {
-    console.error("Failed to read local database snapshot, using an empty cache:", error);
-    return { ...emptySnapshot };
+function updateUserCache(updatedUser: StoredUser) {
+  const index = cache.users.findIndex((entry) => entry.id === updatedUser.id);
+  if (index === -1) {
+    cache.users.push(updatedUser);
+  } else {
+    cache.users[index] = updatedUser;
   }
 }
 
-function writeFileSnapshot(snapshot: DBStructure) {
-  ensureFileExists();
-
-  const fileSnapshot: FileSnapshot & { credentials: Record<string, string> } = {
-    users: snapshot.users.map(toPublicUser),
-    chats: snapshot.chats,
-    logs: snapshot.logs,
-    credentials: snapshot.users.reduce<Record<string, string>>((acc, user) => {
-      acc[user.id] = user.passwordHash;
-      return acc;
-    }, {})
-  };
-
-  fs.writeFileSync(DB_FILE, JSON.stringify(fileSnapshot, null, 2), "utf-8");
+function updateChatCache(userId: string, messages: ChatMessage[]) {
+  cache.chats[userId] = messages;
 }
 
-function getMongoDb() {
-  if (!mongoClient) {
-    throw new Error("MongoDB client is not ready.");
-  }
-
-  return mongoClient.db(MONGODB_DB_NAME);
+function updateLogCache(userId: string, entries: LogEntry[]) {
+  cache.logs[userId] = entries;
 }
 
-function syncCache(snapshot: DBStructure) {
-  cache = {
-    users: snapshot.users.map((user) => normalizeUser(user)),
-    chats: snapshot.chats || {},
-    logs: snapshot.logs || {}
-  };
+async function ensureIndexes() {
+  await Promise.all([
+    getCollection<StoredUser>(COLLECTIONS.users).createIndex({ id: 1 }, { unique: true }),
+    getCollection<StoredUser>(COLLECTIONS.users).createIndex({ email: 1 }, { unique: true }),
+    getCollection<ChatDocument>(COLLECTIONS.chats).createIndex({ userId: 1 }, { unique: true }),
+    getCollection<LogDocument>(COLLECTIONS.logs).createIndex({ userId: 1 }, { unique: true }),
+    getCollection<WhatsAppAuthCredsDocument>(COLLECTIONS.whatsappAuthCreds).createIndex({ userId: 1 }, { unique: true }),
+    getCollection<WhatsAppAuthKeyDocument>(COLLECTIONS.whatsappAuthKeys).createIndex({ userId: 1, keyType: 1, keyId: 1 }, { unique: true })
+  ]);
 }
 
-function hasSnapshotData(snapshot: DBStructure) {
-  return snapshot.users.length > 0 || Object.keys(snapshot.chats).length > 0 || Object.keys(snapshot.logs).length > 0;
-}
-
-async function loadMongoSnapshot(): Promise<DBStructure> {
-  if (!mongoClient) {
-    return { ...emptySnapshot };
-  }
-
-  const db = getMongoDb();
+async function loadApplicationCache() {
   const [userDocs, chatDocs, logDocs] = await Promise.all([
-    db.collection<StoredUser>("users").find({}).toArray(),
-    db.collection<{ userId: string; messages: ChatMessage[] }>("chats").find({}).toArray(),
-    db.collection<{ userId: string; entries: LogEntry[] }>("logs").find({}).toArray()
+    getCollection<StoredUser>(COLLECTIONS.users).find({}).toArray(),
+    getCollection<ChatDocument>(COLLECTIONS.chats).find({}).toArray(),
+    getCollection<LogDocument>(COLLECTIONS.logs).find({}).toArray()
   ]);
 
-  return {
+  cache = {
     users: userDocs.map((user) => normalizeUser(user)),
     chats: chatDocs.reduce<Record<string, ChatMessage[]>>((acc, doc) => {
       acc[doc.userId] = doc.messages || [];
@@ -164,77 +157,31 @@ async function loadMongoSnapshot(): Promise<DBStructure> {
   };
 }
 
-async function persistUsers() {
-  if (!mongoClient) {
-    writeFileSnapshot(cache);
-    return;
-  }
-
-  const collection = getMongoDb().collection<StoredUser>("users");
-  await Promise.all(cache.users.map((user) => collection.updateOne({ id: user.id }, { $set: user }, { upsert: true })));
-}
-
-async function persistChats(userId: string) {
-  if (!mongoClient) {
-    writeFileSnapshot(cache);
-    return;
-  }
-
-  await getMongoDb().collection("chats").updateOne(
-    { userId },
-    { $set: { userId, messages: cache.chats[userId] || [] } },
+async function persistUserDocument(user: StoredUser) {
+  await getCollection<StoredUser>(COLLECTIONS.users).updateOne(
+    { id: user.id },
+    { $set: user },
     { upsert: true }
   );
+  updateUserCache(user);
 }
 
-async function persistLogs(userId: string) {
-  if (!mongoClient) {
-    writeFileSnapshot(cache);
-    return;
-  }
-
-  await getMongoDb().collection("logs").updateOne(
+async function persistChatDocument(userId: string, messages: ChatMessage[]) {
+  await getCollection<ChatDocument>(COLLECTIONS.chats).updateOne(
     { userId },
-    { $set: { userId, entries: cache.logs[userId] || [] } },
+    { $set: { userId, messages } },
     { upsert: true }
   );
+  updateChatCache(userId, messages);
 }
 
-function enqueuePersist(task: () => Promise<void>) {
-  persistQueue = persistQueue
-    .then(() => task())
-    .then(() => undefined)
-    .catch((error) => {
-      console.error("Failed to persist database state:", error);
-    });
-}
-
-async function seedMongoFromSnapshot(snapshot: DBStructure) {
-  if (!mongoClient) {
-    return;
-  }
-
-  await persistUsers();
-
-  await Promise.all(
-    Object.entries(snapshot.chats).map(([userId, messages]) =>
-      getMongoDb().collection("chats").updateOne(
-        { userId },
-        { $set: { userId, messages } },
-        { upsert: true }
-      )
-    )
+async function persistLogDocument(userId: string, entries: LogEntry[]) {
+  await getCollection<LogDocument>(COLLECTIONS.logs).updateOne(
+    { userId },
+    { $set: { userId, entries } },
+    { upsert: true }
   );
-
-  await Promise.all(
-    Object.entries(snapshot.logs).map(([userId, entries]) =>
-      getMongoDb().collection("logs").updateOne(
-        { userId },
-        { $set: { userId, entries } },
-        { upsert: true }
-      )
-    )
-  );
+  updateLogCache(userId, entries);
 }
 
 export async function initializeDatabase() {
@@ -247,104 +194,172 @@ export async function initializeDatabase() {
   }
 
   initPromise = (async () => {
-    const fileSnapshot = readFileSnapshot();
-
     if (!MONGODB_URI) {
-      syncCache(fileSnapshot);
-      initialized = true;
-      return;
+      throw new Error("MONGODB_URI is required. The application now uses MongoDB exclusively.");
     }
 
-    try {
-      mongoClient = new MongoClient(MONGODB_URI);
-      await mongoClient.connect();
+    mongoClient = new MongoClient(MONGODB_URI);
+    await mongoClient.connect();
+    database = mongoClient.db(MONGODB_DB_NAME);
 
-      const mongoSnapshot = await loadMongoSnapshot();
-      if (hasSnapshotData(mongoSnapshot)) {
-        syncCache(mongoSnapshot);
-      } else {
-        syncCache(fileSnapshot);
-        if (hasSnapshotData(fileSnapshot)) {
-          await seedMongoFromSnapshot(fileSnapshot);
-        }
-      }
+    await ensureIndexes();
+    await loadApplicationCache();
 
-      initialized = true;
-      console.log(`Connected to MongoDB database \"${MONGODB_DB_NAME}\" for app persistence.`);
-    } catch (error) {
-      mongoClient = null;
-      syncCache(fileSnapshot);
-      initialized = true;
-      console.error("MongoDB initialization failed. Falling back to local file storage:", error);
-    }
-  })();
+    initialized = true;
+    console.log(`Connected to MongoDB database \"${MONGODB_DB_NAME}\" for app persistence.`);
+  })().catch((error) => {
+    initPromise = null;
+    throw error;
+  });
 
   return initPromise;
 }
 
-// Hashing helper
+export function getMongoDb() {
+  return requireDatabase();
+}
+
+export async function createMongoAuthState(userId: string): Promise<{ state: { creds: AuthenticationCreds; keys: SignalKeyStore }; saveCreds: () => Promise<void> }> {
+  await initializeDatabase();
+
+  const credsCollection = getCollection<WhatsAppAuthCredsDocument>(COLLECTIONS.whatsappAuthCreds);
+  const keysCollection = getCollection<WhatsAppAuthKeyDocument>(COLLECTIONS.whatsappAuthKeys);
+
+  const existingCreds = await credsCollection.findOne({ userId });
+  const creds = existingCreds ? decodeMongoValue<AuthenticationCreds>(existingCreds.payload) : initAuthCreds();
+
+  const state: { creds: AuthenticationCreds; keys: SignalKeyStore } = {
+    creds,
+    keys: {
+      get: async (type, ids) => {
+        const docs = await keysCollection.find({ userId, keyType: type, keyId: { $in: ids } }).toArray();
+        const data: Record<string, any> = {};
+
+        for (const id of ids) {
+          data[id] = undefined;
+        }
+
+        for (const doc of docs) {
+          if (doc.payload == null) {
+            data[doc.keyId] = null;
+            continue;
+          }
+
+          const value = decodeMongoValue<any>(doc.payload);
+          data[doc.keyId] = type === "app-state-sync-key" && value ? proto.Message.AppStateSyncKeyData.fromObject(value) : value;
+        }
+
+        return data;
+      },
+      set: async (data) => {
+        const tasks: Promise<unknown>[] = [];
+
+        for (const keyType of Object.keys(data)) {
+          const entries = data[keyType as keyof SignalDataSet] || {};
+
+          for (const [keyId, value] of Object.entries(entries)) {
+            if (value == null) {
+              tasks.push(keysCollection.deleteOne({ userId, keyType, keyId }));
+              continue;
+            }
+
+            tasks.push(
+              keysCollection.updateOne(
+                { userId, keyType, keyId },
+                {
+                  $set: {
+                    userId,
+                    keyType,
+                    keyId,
+                    payload: encodeMongoValue(value),
+                    updatedAt: new Date()
+                  }
+                },
+                { upsert: true }
+              )
+            );
+          }
+        }
+
+        await Promise.all(tasks);
+      }
+    }
+  };
+
+  return {
+    state,
+    saveCreds: async () => {
+      await credsCollection.updateOne(
+        { userId },
+        {
+          $set: {
+            userId,
+            payload: encodeMongoValue(state.creds),
+            updatedAt: new Date()
+          }
+        },
+        { upsert: true }
+      );
+    }
+  };
+}
+
 export function hashPassword(password: string): string {
   return crypto.createHash("sha256").update(password).digest("hex");
 }
 
 export const db = {
-  getUsers: (): User[] => {
-    return cache.users.map(toPublicUser);
-  },
+  getUsers: async (): Promise<User[]> => cache.users.map(toPublicUser),
 
-  getUserById: (id: string): User | undefined => {
+  getUserById: async (id: string): Promise<User | undefined> => {
     const user = cache.users.find((entry) => entry.id === id);
     return user ? toPublicUser(user) : undefined;
   },
 
-  getUserByEmail: (email: string): User | undefined => {
+  getUserByEmail: async (email: string): Promise<User | undefined> => {
     const user = cache.users.find((entry) => entry.email.toLowerCase() === email.toLowerCase());
     return user ? toPublicUser(user) : undefined;
   },
 
-  createUser: (email: string, passwordHash: string): User => {
+  createUser: async (email: string, passwordHash: string): Promise<User> => {
     const newUser = normalizeUser({
       id: crypto.randomUUID(),
       email,
       geminiApiKey: "",
       botName: "Gemini Auto-Bot",
-      systemInstruction:
-        "You are an elegant, polite, and helpful personal WhatsApp auto-responder bot. Keep your replies concise, helpful, and natural, matching the style of message chat applications. Never use excessively long or formal paragraphs. Always write in a way suited to chat layouts.",
+      systemInstruction: defaultSystemInstruction,
       whatsappStatus: "Disconnected",
       isPaused: false,
       createdAt: new Date().toISOString(),
       passwordHash
     });
 
-    cache.users.push(newUser);
-    cache.logs[newUser.id] = [
-      {
-        id: crypto.randomUUID(),
-        timestamp: new Date().toISOString(),
-        type: "success",
-        message: "Account created successfully. Welcome to WhatsApp Gemini Agent dashboard!"
-      }
-    ];
-    cache.chats[newUser.id] = [
-      {
-        id: crypto.randomUUID(),
-        sender: "bot",
-        text: "System: Auto-responder service initialized. Use the Live Sandbox on the right or link your WhatsApp device to test replies immediately.",
-        timestamp: new Date().toISOString(),
-        isSimulated: true
-      }
-    ];
+    await persistUserDocument(newUser);
 
-    void enqueuePersist(async () => {
-      await persistUsers();
-      await persistChats(newUser.id);
-      await persistLogs(newUser.id);
-    });
+    const now = new Date().toISOString();
+    const welcomeLog: LogEntry = {
+      id: crypto.randomUUID(),
+      timestamp: now,
+      type: "success",
+      message: "Account created successfully. Welcome to WhatsApp Gemini Agent dashboard!"
+    };
+    const welcomeChat: ChatMessage = {
+      id: crypto.randomUUID(),
+      sender: "bot",
+      text: "System: Auto-responder service initialized. Use the Live Sandbox on the right or link your WhatsApp device to test replies immediately.",
+      timestamp: now,
+      isSimulated: true
+    };
+
+    await Promise.all([
+      persistLogDocument(newUser.id, [welcomeLog]),
+      persistChatDocument(newUser.id, [welcomeChat])
+    ]);
 
     return toPublicUser(newUser);
   },
 
-  verifyAndGetUser: (email: string, passwordHash: string): User | null => {
+  verifyAndGetUser: async (email: string, passwordHash: string): Promise<User | null> => {
     const user = cache.users.find((entry) => entry.email.toLowerCase() === email.toLowerCase());
     if (!user) {
       return null;
@@ -353,69 +368,49 @@ export const db = {
     return user.passwordHash === passwordHash ? toPublicUser(user) : null;
   },
 
-  updateUser: (id: string, updates: Partial<User>): User => {
-    const index = cache.users.findIndex((entry) => entry.id === id);
-    if (index === -1) {
+  updateUser: async (id: string, updates: Partial<User>): Promise<User> => {
+    const existing = cache.users.find((entry) => entry.id === id);
+    if (!existing) {
       throw new Error(`User with ID ${id} not found`);
     }
 
-    cache.users[index] = normalizeUser({
-      ...cache.users[index],
+    const updatedUser = normalizeUser({
+      ...existing,
       ...updates,
-      passwordHash: cache.users[index].passwordHash
+      passwordHash: existing.passwordHash
     });
 
-    void enqueuePersist(async () => {
-      await persistUsers();
-    });
-
-    return toPublicUser(cache.users[index]);
+    await persistUserDocument(updatedUser);
+    return toPublicUser(updatedUser);
   },
 
-  getChats: (userId: string): ChatMessage[] => {
-    return cache.chats[userId] || [];
-  },
+  getChats: async (userId: string): Promise<ChatMessage[]> => cache.chats[userId] || [],
 
-  addChat: (userId: string, chat: Omit<ChatMessage, "id" | "timestamp">): ChatMessage => {
-    if (!cache.chats[userId]) {
-      cache.chats[userId] = [];
-    }
-
+  addChat: async (userId: string, chat: Omit<ChatMessage, "id" | "timestamp">): Promise<ChatMessage> => {
+    const messages = cache.chats[userId] ? [...cache.chats[userId]] : [];
     const newChat: ChatMessage = {
       ...chat,
       id: crypto.randomUUID(),
       timestamp: new Date().toISOString()
     };
 
-    cache.chats[userId].push(newChat);
-    if (cache.chats[userId].length > 100) {
-      cache.chats[userId].shift();
+    messages.push(newChat);
+    if (messages.length > 100) {
+      messages.shift();
     }
 
-    void enqueuePersist(async () => {
-      await persistChats(userId);
-    });
-
+    await persistChatDocument(userId, messages);
     return newChat;
   },
 
-  clearChats: (userId: string) => {
-    cache.chats[userId] = [];
-
-    void enqueuePersist(async () => {
-      await persistChats(userId);
-    });
+  clearChats: async (userId: string) => {
+    await persistChatDocument(userId, []);
   },
 
-  getLogs: (userId: string): LogEntry[] => {
-    return cache.logs[userId] || [];
-  },
+  getLogs: async (userId: string): Promise<LogEntry[]> => cache.logs[userId] || [],
 
-  addLog: (userId: string, type: LogEntry["type"], message: string): LogEntry => {
-    if (!cache.logs[userId]) {
-      cache.logs[userId] = [];
-    }
-
+  addLog: async (userId: string, type: LogEntry["type"], message: string): Promise<LogEntry> => {
+    const entries = cache.logs[userId] ? [...cache.logs[userId]] : [];
     const newLog: LogEntry = {
       id: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
@@ -423,15 +418,12 @@ export const db = {
       message
     };
 
-    cache.logs[userId].unshift(newLog);
-    if (cache.logs[userId].length > 50) {
-      cache.logs[userId].pop();
+    entries.unshift(newLog);
+    if (entries.length > 50) {
+      entries.pop();
     }
 
-    void enqueuePersist(async () => {
-      await persistLogs(userId);
-    });
-
+    await persistLogDocument(userId, entries);
     return newLog;
   }
 };

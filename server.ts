@@ -1,14 +1,17 @@
 import express, { Request, Response, NextFunction } from "express";
+import { createServer as createHttpServer } from "http";
+import net from "net";
 import path from "path";
 import crypto from "crypto";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
-import { db, hashPassword, initializeDatabase } from "./src/server/db.ts";
+import { db, hashPassword, initializeDatabase, createMongoAuthState } from "./src/server/db.ts";
 
+dotenv.config({ path: ".env.local" });
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT?.trim() || 3000);
 
 app.use(express.json());
 
@@ -16,8 +19,34 @@ app.use(express.json());
 const activeSockets = new Map<string, any>(); // User ID -> WASocket
 const userCurrentQrs = new Map<string, string>(); // User ID -> Last raw QR string
 
+async function findAvailablePort(startPort: number, maxAttempts = 20): Promise<number> {
+  for (let offset = 0; offset < maxAttempts; offset += 1) {
+    const candidatePort = startPort + offset;
+
+    const isAvailable = await new Promise<boolean>((resolve) => {
+      const probe = net.createServer();
+
+      probe.once("error", () => {
+        resolve(false);
+      });
+
+      probe.once("listening", () => {
+        probe.close(() => resolve(true));
+      });
+
+      probe.listen(candidatePort, "0.0.0.0");
+    });
+
+    if (isAvailable) {
+      return candidatePort;
+    }
+  }
+
+  throw new Error(`Unable to find a free port starting at ${startPort}.`);
+}
+
 // Custom Authentication Middleware
-function authenticateToken(req: Request, res: Response, next: NextFunction) {
+async function authenticateToken(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers["authorization"];
   const token = authHeader && authHeader.split(" ")[1];
 
@@ -32,7 +61,7 @@ function authenticateToken(req: Request, res: Response, next: NextFunction) {
     return;
   }
 
-  const user = db.getUserById(userId);
+  const user = await db.getUserById(userId);
   if (!user) {
     res.status(404).json({ error: "User profile not found." });
     return;
@@ -78,7 +107,7 @@ function verifySessionToken(token: string) {
 // ==========================================
 
 // Register a new user
-app.post("/api/auth/signup", (req: Request, res: Response) => {
+app.post("/api/auth/signup", async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
 
@@ -93,14 +122,14 @@ app.post("/api/auth/signup", (req: Request, res: Response) => {
     }
 
     // Check if user already exists
-    const existing = db.getUserByEmail(email);
+    const existing = await db.getUserByEmail(email);
     if (existing) {
       res.status(422).json({ error: "An account with this email already exists." });
       return;
     }
 
     const hashedPassword = hashPassword(password);
-    const user = db.createUser(email, hashedPassword);
+    const user = await db.createUser(email, hashedPassword);
 
     // Automatically generate session token upon registration
     const sessionToken = createSessionToken(user.id);
@@ -125,7 +154,7 @@ app.post("/api/auth/signup", (req: Request, res: Response) => {
 });
 
 // Login user
-app.post("/api/auth/login", (req: Request, res: Response) => {
+app.post("/api/auth/login", async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
 
@@ -135,7 +164,7 @@ app.post("/api/auth/login", (req: Request, res: Response) => {
     }
 
     const hashedPassword = hashPassword(password);
-    const user = db.verifyAndGetUser(email, hashedPassword);
+    const user = await db.verifyAndGetUser(email, hashedPassword);
 
     if (!user) {
       res.status(401).json({ error: "Incorrect email or password." });
@@ -145,7 +174,7 @@ app.post("/api/auth/login", (req: Request, res: Response) => {
     // Generate login token
     const sessionToken = createSessionToken(user.id);
 
-    db.addLog(user.id, "info", `Logged in from IP ${req.ip || "unknown"}`);
+    await db.addLog(user.id, "info", `Logged in from IP ${req.ip || "unknown"}`);
 
     res.json({
       message: "Login successful",
@@ -167,11 +196,11 @@ app.post("/api/auth/login", (req: Request, res: Response) => {
 });
 
 // Logout user
-app.post("/api/auth/logout", authenticateToken, (req: Request, res: Response) => {
+app.post("/api/auth/logout", authenticateToken, async (req: Request, res: Response) => {
   const token = (req as any).token;
   const user = (req as any).user;
 
-  db.addLog(user.id, "info", "User session logged out.");
+  await db.addLog(user.id, "info", "User session logged out.");
   res.json({ message: "Successfully logged out of active session" });
 });
 
@@ -180,7 +209,7 @@ app.post("/api/auth/logout", authenticateToken, (req: Request, res: Response) =>
 // ==========================================
 
 // Get profile
-app.get("/api/user/profile", authenticateToken, (req: Request, res: Response) => {
+app.get("/api/user/profile", authenticateToken, async (req: Request, res: Response) => {
   const user = (req as any).user;
   const currentRawQr = userCurrentQrs.get(user.id);
   const qrUrl = currentRawQr
@@ -202,7 +231,7 @@ app.get("/api/user/profile", authenticateToken, (req: Request, res: Response) =>
 });
 
 // Update profile settings
-app.post("/api/user/update-settings", authenticateToken, (req: Request, res: Response) => {
+app.post("/api/user/update-settings", authenticateToken, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
     const { geminiApiKey, botName, systemInstruction, isPaused } = req.body;
@@ -213,10 +242,10 @@ app.post("/api/user/update-settings", authenticateToken, (req: Request, res: Res
     if (typeof systemInstruction === "string" && systemInstruction.trim().length > 0) updates.systemInstruction = systemInstruction.trim();
     if (typeof isPaused === "boolean") updates.isPaused = isPaused;
 
-    const updatedUser = db.updateUser(user.id, updates);
+    const updatedUser = await db.updateUser(user.id, updates);
 
     // Log the configuration settings update
-    db.addLog(
+    await db.addLog(
       user.id,
       "success",
       `AI Configuration updated: Named "${updatedUser.botName}". Auto-reply is ${updatedUser.isPaused ? "PAUSED" : "ACTIVE"}.`
@@ -241,24 +270,24 @@ app.post("/api/user/update-settings", authenticateToken, (req: Request, res: Res
 });
 
 // Get user logs
-app.get("/api/user/logs", authenticateToken, (req: Request, res: Response) => {
+app.get("/api/user/logs", authenticateToken, async (req: Request, res: Response) => {
   const user = (req as any).user;
-  const logs = db.getLogs(user.id);
+  const logs = await db.getLogs(user.id);
   res.json({ logs });
 });
 
 // Get user chats
-app.get("/api/user/chats", authenticateToken, (req: Request, res: Response) => {
+app.get("/api/user/chats", authenticateToken, async (req: Request, res: Response) => {
   const user = (req as any).user;
-  const chats = db.getChats(user.id);
+  const chats = await db.getChats(user.id);
   res.json({ chats });
 });
 
 // Clear user chats
-app.post("/api/user/chats/clear", authenticateToken, (req: Request, res: Response) => {
+app.post("/api/user/chats/clear", authenticateToken, async (req: Request, res: Response) => {
   const user = (req as any).user;
-  db.clearChats(user.id);
-  db.addLog(user.id, "info", "Cleared chat logs simulation.");
+  await db.clearChats(user.id);
+  await db.addLog(user.id, "info", "Cleared chat logs simulation.");
   res.json({ message: "Simulated chat history cleared." });
 });
 
@@ -304,7 +333,7 @@ Keep your answer concise (1-3 sentences maximum). Avoid overly long or formal pa
 // Launches/restarts a real Baileys connection for a specific user
 async function startWhatsAppSocket(userId: string): Promise<void> {
   try {
-    const user = db.getUserById(userId);
+    const user = await db.getUserById(userId);
     if (!user) return;
 
     // Disconnect any existing session
@@ -321,11 +350,11 @@ async function startWhatsAppSocket(userId: string): Promise<void> {
       activeSockets.delete(userId);
     }
 
-    db.updateUser(userId, { whatsappStatus: "Loading QR Code" });
-    db.addLog(userId, "info", "Starting headless WhatsApp worker state machine...");
+    await db.updateUser(userId, { whatsappStatus: "Loading QR Code" });
+    await db.addLog(userId, "info", "Starting headless WhatsApp worker state machine...");
 
-    const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = await import("@whiskeysockets/baileys");
-    const { state, saveCreds } = await useMultiFileAuthState(path.join(process.cwd(), "data", "sessions", userId));
+    const { default: makeWASocket, DisconnectReason } = await import("@whiskeysockets/baileys");
+    const { state, saveCreds } = await createMongoAuthState(userId);
 
     const sock = makeWASocket({
       auth: state,
@@ -342,18 +371,18 @@ async function startWhatsAppSocket(userId: string): Promise<void> {
 
       if (qr) {
         userCurrentQrs.set(userId, qr);
-        db.updateUser(userId, { whatsappStatus: "Connecting" });
-        db.addLog(userId, "info", "New scannable QR Code generated for pairing.");
+        void db.updateUser(userId, { whatsappStatus: "Connecting" });
+        void db.addLog(userId, "info", "New scannable QR Code generated for pairing.");
       }
 
       if (connection === "open") {
         const phone = sock.user?.id.split(":")[0] || sock.user?.id;
         const formattedPhone = phone ? `+${phone}` : "Linked Device";
-        db.updateUser(userId, {
+        void db.updateUser(userId, {
           whatsappStatus: "Authenticated",
           whatsappNumber: formattedPhone
         });
-        db.addLog(userId, "success", `WhatsApp successfully connected to device ${formattedPhone}`);
+        void db.addLog(userId, "success", `WhatsApp successfully connected to device ${formattedPhone}`);
         userCurrentQrs.delete(userId);
       }
 
@@ -361,7 +390,7 @@ async function startWhatsAppSocket(userId: string): Promise<void> {
         const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
         const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
         
-        db.addLog(userId, "warning", `WhatsApp connection closed. Status code: ${statusCode || "unknown"}. Reconnecting: ${shouldReconnect}`);
+        void db.addLog(userId, "warning", `WhatsApp connection closed. Status code: ${statusCode || "unknown"}. Reconnecting: ${shouldReconnect}`);
 
         if (shouldReconnect) {
           // Re-initialize socket in background
@@ -369,11 +398,11 @@ async function startWhatsAppSocket(userId: string): Promise<void> {
             startWhatsAppSocket(userId);
           }, 5000);
         } else {
-          db.updateUser(userId, {
+          void db.updateUser(userId, {
             whatsappStatus: "Disconnected",
             whatsappNumber: undefined
           });
-          db.addLog(userId, "warning", "WhatsApp session unlinked/logged out by user.");
+          void db.addLog(userId, "warning", "WhatsApp session unlinked/logged out by user.");
           activeSockets.delete(userId);
           userCurrentQrs.delete(userId);
         }
@@ -389,46 +418,46 @@ async function startWhatsAppSocket(userId: string): Promise<void> {
           const senderName = msg.pushName || senderJid?.split("@")[0] || "Someone";
 
           if (text && senderJid) {
-            const userProfile = db.getUserById(userId);
+            const userProfile = await db.getUserById(userId);
             if (!userProfile) return;
 
             // Save incoming history
-            db.addChat(userId, {
+            await db.addChat(userId, {
               sender: senderName,
               text: text,
               isSimulated: false
             });
-            db.addLog(userId, "info", `Message received from ${senderName}: "${text}"`);
+            await db.addLog(userId, "info", `Message received from ${senderName}: "${text}"`);
 
             if (userProfile.isPaused) {
-              db.addLog(userId, "warning", `Auto-reply to ${senderName} ignored because system is currently PAUSED.`);
+              await db.addLog(userId, "warning", `Auto-reply to ${senderName} ignored because system is currently PAUSED.`);
               return;
             }
 
-            db.addLog(userId, "ai", `Consulting Gemini auto-reply...`);
+            await db.addLog(userId, "ai", `Consulting Gemini auto-reply...`);
             const aiReply = await generateGeminiResponseForUser(userProfile, senderName, text);
 
             // Send reply through the socket
             await sock.sendMessage(senderJid, { text: aiReply });
             
-            db.addChat(userId, {
+            await db.addChat(userId, {
               sender: "bot",
               text: aiReply,
               isSimulated: false
             });
-            db.addLog(userId, "success", `Auto-replied back to ${senderName}.`);
+            await db.addLog(userId, "success", `Auto-replied back to ${senderName}.`);
           }
         }
       } catch (msgErr: any) {
         console.error("Error processing messages.upsert event:", msgErr);
-        db.addLog(userId, "error", `Failed message handling: ${msgErr.message || msgErr.toString()}`);
+        void db.addLog(userId, "error", `Failed message handling: ${msgErr.message || msgErr.toString()}`);
       }
     });
 
   } catch (err: any) {
     console.error("Error starting WhatsApp session:", err);
-    db.addLog(userId, "error", `Connection state machine error: ${err.message || err.toString()}`);
-    db.updateUser(userId, { whatsappStatus: "Disconnected" });
+    void db.addLog(userId, "error", `Connection state machine error: ${err.message || err.toString()}`);
+    void db.updateUser(userId, { whatsappStatus: "Disconnected" });
   }
 }
 
@@ -437,7 +466,7 @@ async function startWhatsAppSocket(userId: string): Promise<void> {
 // ==========================================
 
 // Request/Generate connection QR
-app.post("/api/whatsapp/connect", authenticateToken, (req: Request, res: Response) => {
+app.post("/api/whatsapp/connect", authenticateToken, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
 
@@ -474,12 +503,12 @@ app.post("/api/whatsapp/disconnect", authenticateToken, async (req: Request, res
     }
     userCurrentQrs.delete(user.id);
 
-    const updated = db.updateUser(user.id, {
+    const updated = await db.updateUser(user.id, {
       whatsappStatus: "Disconnected",
       whatsappNumber: undefined
     });
 
-    db.addLog(user.id, "warning", "WhatsApp session terminated. Auto-responder offline.");
+    await db.addLog(user.id, "warning", "WhatsApp session terminated. Auto-responder offline.");
 
     res.json({
       message: "WhatsApp session disconnected.",
@@ -492,19 +521,19 @@ app.post("/api/whatsapp/disconnect", authenticateToken, async (req: Request, res
 });
 
 // Simulate scan pairing (for easy sandbox experience)
-app.post("/api/whatsapp/simulate-scan", authenticateToken, (req: Request, res: Response) => {
+app.post("/api/whatsapp/simulate-scan", authenticateToken, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
     const { phoneNumber } = req.body;
 
     const formattedNumber = phoneNumber ? phoneNumber.trim() : "+1 (555) 781-8051";
 
-    const updated = db.updateUser(user.id, {
+    const updated = await db.updateUser(user.id, {
       whatsappStatus: "Authenticated",
       whatsappNumber: formattedNumber
     });
 
-    db.addLog(user.id, "success", `WhatsApp successfully connected to device matching ${formattedNumber}`);
+    await db.addLog(user.id, "success", `WhatsApp successfully connected to device matching ${formattedNumber}`);
 
     res.json({
       message: "Pairing simulation verified.",
@@ -536,22 +565,22 @@ app.post("/api/simulator/chat", authenticateToken, async (req: Request, res: Res
     const sender = fromName ? fromName.trim() : "+1 (555) 049-2195";
 
     // 1. Add user message to historical chats
-    const incomingChat = db.addChat(user.id, {
+    const incomingChat = await db.addChat(user.id, {
       sender,
       text: trimmedMsg,
       isSimulated: true
     });
 
-    db.addLog(user.id, "info", `Incoming text on WhatsApp index from "${sender}": "${trimmedMsg}"`);
+    await db.addLog(user.id, "info", `Incoming text on WhatsApp index from "${sender}": "${trimmedMsg}"`);
 
     // 2. Check configuration status (Pause mode)
     if (user.isPaused) {
-      const systemMessage = db.addChat(user.id, {
+      const systemMessage = await db.addChat(user.id, {
         sender: "bot",
         text: `[System Notification: Bot is currently paused. Replier did not fire content.]`,
         isSimulated: true
       });
-      db.addLog(user.id, "warning", `Blocked response to message from ${sender} because auto-reply is currently PAUSED.`);
+      await db.addLog(user.id, "warning", `Blocked response to message from ${sender} because auto-reply is currently PAUSED.`);
       res.json({
         incoming: incomingChat,
         reply: systemMessage,
@@ -569,7 +598,7 @@ app.post("/api/simulator/chat", authenticateToken, async (req: Request, res: Res
          throw new Error("Missing API Key. Neither user custom key nor default server key is defined.");
       }
 
-      db.addLog(user.id, "ai", `Consulting Gemini AI with instructions set...`);
+      await db.addLog(user.id, "ai", `Consulting Gemini AI with instructions set...`);
 
       // Initialize the genuine modern @google/genai SDK on the server side
       const ai = new GoogleGenAI({
@@ -605,13 +634,13 @@ Keep your answer concise (1-3 sentences maximum). Avoid overly long or formal pa
       const replyContent = aiResponse.text || "I was unable to formulate a message right now.";
 
       // 4. Save Bot Reply to Database
-      const replyChat = db.addChat(user.id, {
+      const replyChat = await db.addChat(user.id, {
         sender: "bot",
         text: replyContent,
         isSimulated: true
       });
 
-      db.addLog(
+      await db.addLog(
         user.id, 
         "success", 
         `Auto-Replied successfully using Gemini. Reponded: "${replyContent.substring(0, 40)}${replyContent.length > 40 ? "..." : ""}"`
@@ -625,9 +654,9 @@ Keep your answer concise (1-3 sentences maximum). Avoid overly long or formal pa
 
     } catch (aiError: any) {
       console.error("Gemini Generation Error:", aiError);
-      db.addLog(user.id, "error", `Gemini API execution failed: ${aiError.message || aiError.toString()}`);
+      await db.addLog(user.id, "error", `Gemini API execution failed: ${aiError.message || aiError.toString()}`);
       
-      const errorChat = db.addChat(user.id, {
+      const errorChat = await db.addChat(user.id, {
         sender: "bot",
         text: `Error auto-responding using Gemini. Please review your settings or secrets panel. Details: ${aiError.message || "Failed request validation"}`,
         isSimulated: true
@@ -654,11 +683,20 @@ Keep your answer concise (1-3 sentences maximum). Avoid overly long or formal pa
 // Handle Vite middleware inside server for hot reloads
 const startServer = async () => {
   await initializeDatabase();
+  const httpServer = createHttpServer(app);
+  const listenPort = await findAvailablePort(PORT);
 
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: {
+          server: httpServer
+        },
+        hmr: {
+          server: httpServer
+        }
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);
@@ -671,8 +709,8 @@ const startServer = async () => {
   }
 
   if (process.env.VERCEL !== "1") {
-    app.listen(PORT, "0.0.0.0", () => {
-      console.log(`WhatsApp-Gemini full-stack server running securely on http://localhost:${PORT}`);
+    httpServer.listen(listenPort, "0.0.0.0", () => {
+      console.log(`WhatsApp-Gemini full-stack server running securely on http://localhost:${listenPort}`);
     });
   }
 };

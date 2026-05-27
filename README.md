@@ -15,6 +15,9 @@ View your app in AI Studio: https://ai.studio/apps/9d0cd470-34ad-404d-85ab-de1f6
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+2. Set the required environment variables in [.env.local](.env.local):
+   `MONGODB_URI`, `GEMINI_API_KEY`, and optionally `MONGODB_DB_NAME=rantuChat`
 3. Run the app:
    `npm run dev`
+
+The application now persists all user, chat, log, and WhatsApp session data exclusively in MongoDB.

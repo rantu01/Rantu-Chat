@@ -5,9 +5,10 @@
  */
 
 import { GoogleGenAI } from "@google/genai";
-import { useMultiFileAuthState, DisconnectReason } from "@whiskeysockets/baileys";
+import { DisconnectReason } from "@whiskeysockets/baileys";
 import makeWASocket from "@whiskeysockets/baileys";
 import { MongoClient } from "mongodb";
+import { createMongoAuthState } from "./db.ts";
 
 /**
  * PRODUCTION-READY MULTI-USER WHATSAPP-GEMINI WORKER
@@ -46,9 +47,7 @@ export class MultiUserWhatsAppManager {
   async startUserSession(config: UserSessionConfig, onQrGenerated: (qr: string) => void, onConnected: () => void) {
     const { userId, geminiApiKey, systemInstruction } = config;
 
-    // 1. Setup localized session auth state using standard file paths or 
-    // custom MongoDB auth state providers to persist verification keys
-    const { state, saveCreds } = await useMultiFileAuthState(`./sessions/${userId}`);
+    const { state, saveCreds } = await createMongoAuthState(userId);
 
     // Create the socket connection
     const sock = makeWASocket({
