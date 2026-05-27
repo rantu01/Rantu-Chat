@@ -26,6 +26,12 @@ export default function Auth({ onAuthSuccess }: AuthProps) {
         body: JSON.stringify({ email, password }),
       });
 
+      const contentType = response.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        const fallbackText = await response.text();
+        throw new Error(fallbackText || `Server returned a non-JSON response (status ${response.status}).`);
+      }
+
       const data = await response.json();
 
       if (!response.ok) {

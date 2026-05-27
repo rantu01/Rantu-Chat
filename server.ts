@@ -12,10 +12,6 @@ const PORT = 3000;
 
 app.use(express.json());
 
-// In-memory active login sessions mapping
-// Token -> User ID
-const activeSessions = new Map<string, string>();
-
 // Active WhatsApp Web sockets tracking
 const activeSockets = new Map<string, any>(); // User ID -> WASocket
 const userCurrentQrs = new Map<string, string>(); // User ID -> Last raw QR string
@@ -30,7 +26,7 @@ function authenticateToken(req: Request, res: Response, next: NextFunction) {
     return;
   }
 
-  const userId = activeSessions.get(token);
+  const userId = verifySessionToken(token);
   if (!userId) {
     res.status(403).json({ error: "Session expired or invalid. Please log in again." });
     return;
@@ -46,6 +42,35 @@ function authenticateToken(req: Request, res: Response, next: NextFunction) {
   (req as any).user = user;
   (req as any).token = token;
   next();
+}
+
+function createSessionToken(userId: string) {
+  const payload = Buffer.from(JSON.stringify({ userId, issuedAt: Date.now() })).toString("base64url");
+  const secret = process.env.SESSION_SECRET?.trim() || process.env.GEMINI_API_KEY?.trim() || "whatsapp-gemini-auto-responder-session-secret";
+  const signature = crypto.createHmac("sha256", secret).update(payload).digest("base64url");
+  return `${payload}.${signature}`;
+}
+
+function verifySessionToken(token: string) {
+  const [payload, signature] = token.split(".");
+
+  if (!payload || !signature) {
+    return null;
+  }
+
+  const secret = process.env.SESSION_SECRET?.trim() || process.env.GEMINI_API_KEY?.trim() || "whatsapp-gemini-auto-responder-session-secret";
+  const expectedSignature = crypto.createHmac("sha256", secret).update(payload).digest("base64url");
+
+  if (signature !== expectedSignature) {
+    return null;
+  }
+
+  try {
+    const decoded = JSON.parse(Buffer.from(payload, "base64url").toString("utf-8")) as { userId?: string };
+    return decoded.userId || null;
+  } catch {
+    return null;
+  }
 }
 
 // ==========================================
@@ -78,8 +103,7 @@ app.post("/api/auth/signup", (req: Request, res: Response) => {
     const user = db.createUser(email, hashedPassword);
 
     // Automatically generate session token upon registration
-    const sessionToken = crypto.randomBytes(32).toString("hex");
-    activeSessions.set(sessionToken, user.id);
+    const sessionToken = createSessionToken(user.id);
 
     // Securely return user info (omit credentials)
     res.status(201).json({
@@ -119,8 +143,7 @@ app.post("/api/auth/login", (req: Request, res: Response) => {
     }
 
     // Generate login token
-    const sessionToken = crypto.randomBytes(32).toString("hex");
-    activeSessions.set(sessionToken, user.id);
+    const sessionToken = createSessionToken(user.id);
 
     db.addLog(user.id, "info", `Logged in from IP ${req.ip || "unknown"}`);
 
@@ -148,7 +171,6 @@ app.post("/api/auth/logout", authenticateToken, (req: Request, res: Response) =>
   const token = (req as any).token;
   const user = (req as any).user;
 
-  activeSessions.delete(token);
   db.addLog(user.id, "info", "User session logged out.");
   res.json({ message: "Successfully logged out of active session" });
 });
@@ -648,11 +670,17 @@ const startServer = async () => {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`WhatsApp-Gemini full-stack server running securely on http://localhost:${PORT}`);
-  });
+  if (process.env.VERCEL !== "1") {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`WhatsApp-Gemini full-stack server running securely on http://localhost:${PORT}`);
+    });
+  }
 };
 
-startServer().catch((err) => {
-  console.error("Failed to boot full-stack integration server:", err);
-});
+if (process.env.VERCEL !== "1") {
+  void startServer().catch((err) => {
+    console.error("Failed to boot full-stack integration server:", err);
+  });
+}
+
+export { app };

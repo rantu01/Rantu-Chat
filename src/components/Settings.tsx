@@ -16,6 +16,16 @@ export default function Settings({ user, onSettingsUpdated, token }: SettingsPro
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
 
+  const safeJson = async (response: Response) => {
+    const contentType = response.headers.get("content-type");
+    if (!contentType || !contentType.includes("application/json")) {
+      const fallbackText = await response.text();
+      throw new Error(fallbackText || `Server returned a non-JSON response (status ${response.status}).`);
+    }
+
+    return response.json();
+  };
+
   useEffect(() => {
     setBotName(user.botName);
     setSystemInstruction(user.systemInstruction);
@@ -42,7 +52,7 @@ export default function Settings({ user, onSettingsUpdated, token }: SettingsPro
         })
       });
 
-      const data = await response.json();
+      const data = await safeJson(response);
 
       if (!response.ok) {
         throw new Error(data.error || "Failed to save settings");
@@ -72,7 +82,7 @@ export default function Settings({ user, onSettingsUpdated, token }: SettingsPro
         body: JSON.stringify({ isPaused: nextPaused })
       });
 
-      const data = await response.json();
+      const data = await safeJson(response);
       if (response.ok) {
         onSettingsUpdated(data.user);
       }
