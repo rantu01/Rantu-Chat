@@ -171,6 +171,18 @@
   "logs": {
     "7fd5b376-0824-4274-bd45-f78df0811f09": [
       {
+        "id": "fa2546a3-6cde-416f-8efd-68aeaba03cf8",
+        "timestamp": "2026-05-27T17:37:07.480Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "4b66f503-dc50-4d07-b3fd-57e6f3c5b320",
+        "timestamp": "2026-05-27T17:37:05.891Z",
+        "type": "info",
+        "message": "User session logged out."
+      },
+      {
         "id": "1239e044-c64d-49c8-a74e-290d6fbb225d",
         "timestamp": "2026-05-27T17:22:32.468Z",
         "type": "info",
@@ -457,18 +469,6 @@
         "timestamp": "2026-05-27T17:01:45.968Z",
         "type": "warning",
         "message": "WhatsApp session terminated. Auto-responder offline."
-      },
-      {
-        "id": "c48b536a-a3ed-4b67-bd53-d5a14143ab85",
-        "timestamp": "2026-05-27T17:00:11.034Z",
-        "type": "info",
-        "message": "Logged in from IP 127.0.0.1"
-      },
-      {
-        "id": "ac7740cc-c3e1-4e6f-9e78-f404a54b84ca",
-        "timestamp": "2026-05-27T16:43:44.788Z",
-        "type": "info",
-        "message": "New scannable QR Code generated for pairing."
       }
     ],
     "3ef17634-a982-47cb-b8f0-7a7d7e358199": [
