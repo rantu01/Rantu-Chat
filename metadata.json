@@ -1,0 +1,6 @@
+{
+  "name": "WhatsApp Gemini Auto Responder",
+  "description": "Multi-user dashboard to pair WhatsApp and automatically reply to messages using Gemini AI, featuring an interactive live sandbox simulator.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

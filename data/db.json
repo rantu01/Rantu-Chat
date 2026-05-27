@@ -1,0 +1,493 @@
+{
+  "users": [
+    {
+      "id": "7fd5b376-0824-4274-bd45-f78df0811f09",
+      "email": "rantumondal06@gmail.com",
+      "geminiApiKey": "AIzaSyAMrM_UalUxbJP8uw0NNPG3XHsqS0K1wtM",
+      "botName": "Gemini Auto-Bot",
+      "systemInstruction": "You are an elegant, polite, and helpful personal WhatsApp auto-responder bot. Keep your replies concise, helpful, and natural, matching the style of message chat applications. Never use excessively long or formal paragraphs. Always write in a way suited to chat layouts.",
+      "whatsappStatus": "Authenticated",
+      "whatsappNumber": "+8801814293906",
+      "isPaused": false,
+      "createdAt": "2026-05-27T16:30:25.588Z"
+    },
+    {
+      "id": "3ef17634-a982-47cb-b8f0-7a7d7e358199",
+      "email": "rantu@gmail.com",
+      "geminiApiKey": "",
+      "botName": "Gemini Auto-Bot",
+      "systemInstruction": "You are an elegant, polite, and helpful personal WhatsApp auto-responder bot. Keep your replies concise, helpful, and natural, matching the style of message chat applications. Never use excessively long or formal paragraphs. Always write in a way suited to chat layouts.",
+      "whatsappStatus": "Disconnected",
+      "isPaused": false,
+      "createdAt": "2026-05-27T17:21:17.705Z"
+    }
+  ],
+  "chats": {
+    "7fd5b376-0824-4274-bd45-f78df0811f09": [
+      {
+        "id": "e82a4806-d722-4e0f-b1a4-d3eab7a8b4f0",
+        "sender": "bot",
+        "text": "System: Auto-responder service initialized. Use the Live Sandbox on the right or link your WhatsApp device to test replies immediately.",
+        "timestamp": "2026-05-27T16:30:25.588Z",
+        "isSimulated": true
+      },
+      {
+        "sender": "+1 (555) 781-8051",
+        "text": "hi",
+        "isSimulated": true,
+        "id": "476a6cf2-6387-4dd8-8c6d-6f9f8ebf59e1",
+        "timestamp": "2026-05-27T16:33:28.807Z"
+      },
+      {
+        "sender": "bot",
+        "text": "Hello! I'm Gemini Auto-Bot, your host's personal assistant. How can I help you today?",
+        "isSimulated": true,
+        "id": "e662cddb-7998-4152-bfc6-605453d46ce0",
+        "timestamp": "2026-05-27T16:33:32.006Z"
+      },
+      {
+        "sender": "+1 (555) 781-8051",
+        "text": "hi hello",
+        "isSimulated": true,
+        "id": "644d4aec-7877-4f31-87e7-25883aceae49",
+        "timestamp": "2026-05-27T16:40:48.227Z"
+      },
+      {
+        "sender": "bot",
+        "text": "Hello! I'm Gemini Auto-Bot, the personal AI assistant for this number. How can I help you today, or would you like me to pass along a message?",
+        "isSimulated": true,
+        "id": "abf41642-6d40-441d-a4cf-f2b66b237f0c",
+        "timestamp": "2026-05-27T16:40:51.190Z"
+      },
+      {
+        "sender": "+1 (555) 781-8051",
+        "text": "kemon acgho",
+        "isSimulated": true,
+        "id": "d4c65b84-f339-4800-b29d-07a6d98e9807",
+        "timestamp": "2026-05-27T16:40:58.998Z"
+      },
+      {
+        "sender": "bot",
+        "text": "Ami bhalo achi, dhonnobad! 😊 I am Gemini Auto-Bot, assisting with this chat while my host is away. How can I help you or pass along a message today?",
+        "isSimulated": true,
+        "id": "804eb568-d99d-48cf-bfc0-ee8c062dfdea",
+        "timestamp": "2026-05-27T16:41:02.796Z"
+      },
+      {
+        "sender": "RANTU NWU-(CSE-3.1)",
+        "text": "hey",
+        "isSimulated": false,
+        "id": "7285d5e3-2308-4af7-a2a3-940dde04a820",
+        "timestamp": "2026-05-27T17:02:47.075Z"
+      },
+      {
+        "sender": "RANTU NWU-(CSE-3.1)",
+        "text": "hellow",
+        "isSimulated": false,
+        "id": "8d451ca9-acf3-4d15-ab02-fa6d926ed0de",
+        "timestamp": "2026-05-27T17:02:51.243Z"
+      },
+      {
+        "sender": "bot",
+        "text": "Hello, Rantu! I'm Gemini Auto-Bot, assisting my user at the moment. How can I help you today, or would you like me to take a message for them?",
+        "isSimulated": false,
+        "id": "f5100d4a-d422-4655-8d6d-82fca763a2fd",
+        "timestamp": "2026-05-27T17:02:51.672Z"
+      },
+      {
+        "sender": "bot",
+        "text": "Hello Rantu! I'm Gemini Auto-Bot, assisting my partner at the moment. How can I help you today, or would you like to leave a message for them?",
+        "isSimulated": false,
+        "id": "0998f3ea-33dd-4e18-947d-b735325b4f91",
+        "timestamp": "2026-05-27T17:02:55.830Z"
+      },
+      {
+        "sender": "RANTU NWU-(CSE-3.1)",
+        "text": "Ki korcho??",
+        "isSimulated": false,
+        "id": "37adcee5-897a-4c4e-94fb-4573e2838174",
+        "timestamp": "2026-05-27T17:04:16.207Z"
+      },
+      {
+        "sender": "bot",
+        "text": "Hello Rantu! I'm Gemini, their personal AI assistant. They are away from their phone right now, but I can certainly take a message for you!",
+        "isSimulated": false,
+        "id": "0080c1d3-96c0-4c03-9238-5328f0f4db5c",
+        "timestamp": "2026-05-27T17:04:20.537Z"
+      },
+      {
+        "sender": "RANTU NWU-(CSE-3.1)",
+        "text": "koi tumi",
+        "isSimulated": false,
+        "id": "6201e0e3-b699-4346-bfd7-256e995a7727",
+        "timestamp": "2026-05-27T17:05:53.412Z"
+      },
+      {
+        "sender": "bot",
+        "text": "Hello Rantu! I am Gemini Auto-Bot, assisting them while they are currently away from their phone. Please leave your message here, and I will make sure they get back to you as soon as they are online!",
+        "isSimulated": false,
+        "id": "e271b72a-c778-450b-9767-d0f8ece61bc7",
+        "timestamp": "2026-05-27T17:05:57.351Z"
+      },
+      {
+        "sender": "RANTU NWU-(CSE-3.1)",
+        "text": "ami ekhon kotha bolte chai",
+        "isSimulated": false,
+        "id": "a6cdff22-811d-4633-a014-df4717879e3a",
+        "timestamp": "2026-05-27T17:06:09.378Z"
+      },
+      {
+        "sender": "bot",
+        "text": "Hello Rantu! I'm Gemini Auto-Bot, assisting them right now. \n\nThey are currently away from their phone, but I will let them know you'd like to talk as soon as they are back. ✨",
+        "isSimulated": false,
+        "id": "09099223-a804-4999-aada-c95e4e62bb4e",
+        "timestamp": "2026-05-27T17:06:14.004Z"
+      },
+      {
+        "sender": "RANTU NWU-(CSE-3.1)",
+        "text": "Tumi kobe bari asba ??",
+        "isSimulated": false,
+        "id": "ad3a5583-1045-41c8-87ee-54dd8b47ccb1",
+        "timestamp": "2026-05-27T17:14:08.999Z"
+      },
+      {
+        "sender": "bot",
+        "text": "Hello Rantu! I'm Gemini Auto-Bot, assisting my user right now. I've notified them of your message, and they will get back to you shortly about when they'll be home. 😊",
+        "isSimulated": false,
+        "id": "7e4084c5-5fae-4fbe-893a-83b559386fe1",
+        "timestamp": "2026-05-27T17:14:14.060Z"
+      }
+    ],
+    "3ef17634-a982-47cb-b8f0-7a7d7e358199": [
+      {
+        "id": "e9b1eebd-a13a-4cfe-93c9-6c8c0671351a",
+        "sender": "bot",
+        "text": "System: Auto-responder service initialized. Use the Live Sandbox on the right or link your WhatsApp device to test replies immediately.",
+        "timestamp": "2026-05-27T17:21:17.705Z",
+        "isSimulated": true
+      }
+    ]
+  },
+  "logs": {
+    "7fd5b376-0824-4274-bd45-f78df0811f09": [
+      {
+        "id": "1239e044-c64d-49c8-a74e-290d6fbb225d",
+        "timestamp": "2026-05-27T17:22:32.468Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "cf8c8b1a-b257-457c-927a-5a59f3c58d7f",
+        "timestamp": "2026-05-27T17:21:34.922Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "bf42723d-58d9-492d-8bde-b9d56b470eeb",
+        "timestamp": "2026-05-27T17:21:34.386Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "7541efb9-95c4-49e6-8e76-b1e4b37d97b9",
+        "timestamp": "2026-05-27T17:21:33.538Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "ddd91cd8-6a2e-43e8-a5cd-5c62acc2455e",
+        "timestamp": "2026-05-27T17:21:25.082Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "951c16fd-aa71-485b-8450-b7c1841392f9",
+        "timestamp": "2026-05-27T17:21:24.226Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "8422e9f2-8a8c-4a1f-b623-c67adb9cdf39",
+        "timestamp": "2026-05-27T17:21:23.459Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "b4e87d9a-27b8-4d43-bea2-28ef2b1b24bd",
+        "timestamp": "2026-05-27T17:21:06.227Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "f4686418-dffc-4e85-8d5a-a7d9b642eaf3",
+        "timestamp": "2026-05-27T17:21:04.805Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "f436163d-4167-4d7a-ad0d-d77408b94161",
+        "timestamp": "2026-05-27T17:21:04.354Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "45c0d08f-b212-4e5f-a311-6fe8aea30042",
+        "timestamp": "2026-05-27T17:21:03.868Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "e991b5f0-d6d6-4e66-9a95-87d7d7051c21",
+        "timestamp": "2026-05-27T17:21:03.388Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "870b2f50-4206-452a-8fb4-e3d0df93a32f",
+        "timestamp": "2026-05-27T17:21:02.955Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "a18b9681-3113-4506-a36b-d586840121fb",
+        "timestamp": "2026-05-27T17:21:02.275Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "82d0ad14-43c8-4721-b936-9dec4f6dec40",
+        "timestamp": "2026-05-27T17:21:00.881Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "12f11df6-cb26-48e5-86d1-b2f491706e91",
+        "timestamp": "2026-05-27T17:20:59.428Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "f021b70f-7026-4216-b949-cbb34f1a4485",
+        "timestamp": "2026-05-27T17:20:54.994Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "6a8bd25e-0884-4e91-8999-079cb36b03eb",
+        "timestamp": "2026-05-27T17:20:54.252Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "b7322314-18af-4028-9152-7f0204a6d1e0",
+        "timestamp": "2026-05-27T17:20:53.371Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "eb781c1a-7f19-4d5b-a85d-5cdfd36d6252",
+        "timestamp": "2026-05-27T17:20:52.092Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "388b2c23-a0db-4410-a00a-72b564357883",
+        "timestamp": "2026-05-27T17:20:50.395Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "044026b1-c363-4bf8-8887-a53ab2482134",
+        "timestamp": "2026-05-27T17:14:14.061Z",
+        "type": "success",
+        "message": "Auto-replied back to RANTU NWU-(CSE-3.1)."
+      },
+      {
+        "id": "6502427f-8bb0-49d3-b6dd-f463d33b1a36",
+        "timestamp": "2026-05-27T17:14:09.001Z",
+        "type": "ai",
+        "message": "Consulting Gemini auto-reply..."
+      },
+      {
+        "id": "6bf3993d-da88-4ceb-b173-7784e3aa4ab9",
+        "timestamp": "2026-05-27T17:14:09.000Z",
+        "type": "info",
+        "message": "Message received from RANTU NWU-(CSE-3.1): \"Tumi kobe bari asba ??\""
+      },
+      {
+        "id": "43953cdc-4780-4de1-9232-55c6ba4a2368",
+        "timestamp": "2026-05-27T17:06:42.459Z",
+        "type": "success",
+        "message": "AI Configuration updated: Named \"Gemini Auto-Bot\". Auto-reply is ACTIVE."
+      },
+      {
+        "id": "5b0f81f5-73eb-4e62-8023-341bc2a32227",
+        "timestamp": "2026-05-27T17:06:39.137Z",
+        "type": "success",
+        "message": "AI Configuration updated: Named \"Gemini Auto-Bot\". Auto-reply is PAUSED."
+      },
+      {
+        "id": "df69401d-54a8-4b3b-9e51-c53c05974f4c",
+        "timestamp": "2026-05-27T17:06:14.006Z",
+        "type": "success",
+        "message": "Auto-replied back to RANTU NWU-(CSE-3.1)."
+      },
+      {
+        "id": "68e61de4-379b-4e48-b8c3-baf7868868ad",
+        "timestamp": "2026-05-27T17:06:09.379Z",
+        "type": "ai",
+        "message": "Consulting Gemini auto-reply..."
+      },
+      {
+        "id": "4109e019-e5bb-4a8c-bdff-babcc51625b4",
+        "timestamp": "2026-05-27T17:06:09.378Z",
+        "type": "info",
+        "message": "Message received from RANTU NWU-(CSE-3.1): \"ami ekhon kotha bolte chai\""
+      },
+      {
+        "id": "7b103ff1-59be-46a0-8c72-bc4ac347c581",
+        "timestamp": "2026-05-27T17:05:57.352Z",
+        "type": "success",
+        "message": "Auto-replied back to RANTU NWU-(CSE-3.1)."
+      },
+      {
+        "id": "80f20fc9-57b7-4035-add4-54a6157f6e59",
+        "timestamp": "2026-05-27T17:05:53.412Z",
+        "type": "ai",
+        "message": "Consulting Gemini auto-reply..."
+      },
+      {
+        "id": "655f576b-8ac9-4c90-8e96-48379efc2a97",
+        "timestamp": "2026-05-27T17:05:53.412Z",
+        "type": "info",
+        "message": "Message received from RANTU NWU-(CSE-3.1): \"koi tumi\""
+      },
+      {
+        "id": "270eb3fa-1e45-43a5-b478-aa03ada81230",
+        "timestamp": "2026-05-27T17:04:20.538Z",
+        "type": "success",
+        "message": "Auto-replied back to RANTU NWU-(CSE-3.1)."
+      },
+      {
+        "id": "30ea4204-a326-4adc-8604-79f1d8fdd385",
+        "timestamp": "2026-05-27T17:04:16.208Z",
+        "type": "ai",
+        "message": "Consulting Gemini auto-reply..."
+      },
+      {
+        "id": "1ac61ee3-c0b0-4163-8b1c-15c010410021",
+        "timestamp": "2026-05-27T17:04:16.207Z",
+        "type": "info",
+        "message": "Message received from RANTU NWU-(CSE-3.1): \"Ki korcho??\""
+      },
+      {
+        "id": "4fa420f8-16a1-4f0f-8a6a-e3650827fa10",
+        "timestamp": "2026-05-27T17:03:58.564Z",
+        "type": "success",
+        "message": "AI Configuration updated: Named \"Gemini Auto-Bot\". Auto-reply is ACTIVE."
+      },
+      {
+        "id": "829dc9e7-1a18-412b-8ace-1859381b415f",
+        "timestamp": "2026-05-27T17:02:55.831Z",
+        "type": "success",
+        "message": "Auto-replied back to RANTU NWU-(CSE-3.1)."
+      },
+      {
+        "id": "6b87fd2e-032d-407a-b5f0-dec633cdb8d9",
+        "timestamp": "2026-05-27T17:02:51.673Z",
+        "type": "success",
+        "message": "Auto-replied back to RANTU NWU-(CSE-3.1)."
+      },
+      {
+        "id": "a0adeeeb-a192-47d9-9244-95a26ce58488",
+        "timestamp": "2026-05-27T17:02:51.244Z",
+        "type": "ai",
+        "message": "Consulting Gemini auto-reply..."
+      },
+      {
+        "id": "18cd2d23-a3c2-4a47-afb1-a4f212a649e0",
+        "timestamp": "2026-05-27T17:02:51.243Z",
+        "type": "info",
+        "message": "Message received from RANTU NWU-(CSE-3.1): \"hellow\""
+      },
+      {
+        "id": "3a46c0ad-8488-43e7-a74a-e636eb4ae03e",
+        "timestamp": "2026-05-27T17:02:47.076Z",
+        "type": "ai",
+        "message": "Consulting Gemini auto-reply..."
+      },
+      {
+        "id": "5dab51c2-be7d-4138-9990-a94256367b9f",
+        "timestamp": "2026-05-27T17:02:47.076Z",
+        "type": "info",
+        "message": "Message received from RANTU NWU-(CSE-3.1): \"hey\""
+      },
+      {
+        "id": "2aa5ed66-bbad-4153-a8ab-b0a3754559c4",
+        "timestamp": "2026-05-27T17:02:23.508Z",
+        "type": "success",
+        "message": "WhatsApp successfully connected to device +8801814293906"
+      },
+      {
+        "id": "f4e7884d-e2ed-47f1-bfe3-a6f8c2b56168",
+        "timestamp": "2026-05-27T17:02:19.662Z",
+        "type": "info",
+        "message": "Starting headless WhatsApp worker state machine..."
+      },
+      {
+        "id": "9cea3b22-fc7e-4cc7-bf4a-35ed5f042366",
+        "timestamp": "2026-05-27T17:02:14.655Z",
+        "type": "warning",
+        "message": "WhatsApp connection closed. Status code: 515. Reconnecting: true"
+      },
+      {
+        "id": "b043ab99-bf57-43b0-bb66-37d41aa16775",
+        "timestamp": "2026-05-27T17:01:48.383Z",
+        "type": "info",
+        "message": "New scannable QR Code generated for pairing."
+      },
+      {
+        "id": "0f3f7560-a153-49b2-add5-7f04410c67e3",
+        "timestamp": "2026-05-27T17:01:46.889Z",
+        "type": "info",
+        "message": "Starting headless WhatsApp worker state machine..."
+      },
+      {
+        "id": "dde82125-f823-4479-bfdb-8502c24d644d",
+        "timestamp": "2026-05-27T17:01:45.968Z",
+        "type": "warning",
+        "message": "WhatsApp session terminated. Auto-responder offline."
+      },
+      {
+        "id": "c48b536a-a3ed-4b67-bd53-d5a14143ab85",
+        "timestamp": "2026-05-27T17:00:11.034Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "ac7740cc-c3e1-4e6f-9e78-f404a54b84ca",
+        "timestamp": "2026-05-27T16:43:44.788Z",
+        "type": "info",
+        "message": "New scannable QR Code generated for pairing."
+      }
+    ],
+    "3ef17634-a982-47cb-b8f0-7a7d7e358199": [
+      {
+        "id": "dd1b8397-2640-4b61-911c-d2462bb0e054",
+        "timestamp": "2026-05-27T17:21:29.635Z",
+        "type": "info",
+        "message": "Logged in from IP 127.0.0.1"
+      },
+      {
+        "id": "628ad43a-e711-498d-a567-3215191421b7",
+        "timestamp": "2026-05-27T17:21:17.705Z",
+        "type": "success",
+        "message": "Account created successfully. Welcome to WhatsApp Gemini Agent dashboard!"
+      }
+    ]
+  },
+  "credentials": {
+    "7fd5b376-0824-4274-bd45-f78df0811f09": "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
+    "3ef17634-a982-47cb-b8f0-7a7d7e358199": "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92"
+  }
+}
