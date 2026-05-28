@@ -18,6 +18,113 @@ app.use(express.json());
 // Active WhatsApp Web sockets tracking
 const activeSockets = new Map<string, any>(); // User ID -> WASocket
 const userCurrentQrs = new Map<string, string>(); // User ID -> Last raw QR string
+type PendingAutoReply = {
+  timeoutId: ReturnType<typeof setTimeout>;
+  version: number;
+};
+
+const pendingAutoReplies = new Map<string, Map<string, PendingAutoReply>>();
+
+function normalizeDelaySeconds(value: unknown) {
+  const numericValue = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return 2;
+  }
+
+  return Math.max(2, Math.floor(numericValue));
+}
+
+function getConversationKey(remoteJid: string | undefined, fallback: string) {
+  return remoteJid || fallback;
+}
+
+function clearPendingAutoReply(userId: string, conversationKey: string) {
+  const userPendingReplies = pendingAutoReplies.get(userId);
+  if (!userPendingReplies) {
+    return;
+  }
+
+  const pending = userPendingReplies.get(conversationKey);
+  if (pending) {
+    clearTimeout(pending.timeoutId);
+    userPendingReplies.delete(conversationKey);
+  }
+
+  if (userPendingReplies.size === 0) {
+    pendingAutoReplies.delete(userId);
+  }
+}
+
+async function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  const user = (req as any).user;
+  if (!user?.isAdmin) {
+    res.status(403).json({ error: "Admin access required." });
+    return;
+  }
+
+  next();
+}
+
+function scheduleAutoReply(options: {
+  userId: string;
+  conversationKey: string;
+  senderLabel: string;
+  messageText: string;
+  isSimulated: boolean;
+  delaySeconds: number;
+  sock?: any;
+  remoteJid?: string;
+}) {
+  const { userId, conversationKey, senderLabel, messageText, isSimulated, delaySeconds, sock, remoteJid } = options;
+
+  clearPendingAutoReply(userId, conversationKey);
+
+  const userPendingReplies = pendingAutoReplies.get(userId) || new Map<string, PendingAutoReply>();
+  const version = (userPendingReplies.get(conversationKey)?.version || 0) + 1;
+  const timeoutId = setTimeout(async () => {
+    const currentPending = pendingAutoReplies.get(userId)?.get(conversationKey);
+    if (!currentPending || currentPending.version !== version) {
+      return;
+    }
+
+    clearPendingAutoReply(userId, conversationKey);
+
+    try {
+      const userProfile = await db.getUserById(userId);
+      if (!userProfile || userProfile.isPaused) {
+        return;
+      }
+
+      await db.addLog(userId, "ai", `Generating delayed auto-reply for ${senderLabel}...`);
+      const aiReply = await generateGeminiResponseForUser(userProfile, senderLabel, messageText);
+
+      if (isSimulated) {
+        await db.addChat(userId, {
+          sender: "bot",
+          text: aiReply,
+          isSimulated: true
+        });
+      } else if (sock && remoteJid) {
+        await sock.sendMessage(remoteJid, { text: aiReply });
+        await db.addChat(userId, {
+          sender: "bot",
+          text: aiReply,
+          isSimulated: false
+        });
+      }
+
+      await db.incrementAiReplyCount(userId);
+
+      await db.addLog(userId, "success", `Auto-replied to ${senderLabel} after a delay.`);
+    } catch (error: any) {
+      console.error(`Delayed auto-reply failed for user ${userId}:`, error);
+      await db.addLog(userId, "error", `Delayed auto-reply failed: ${error.message || error.toString()}`);
+    }
+  }, normalizeDelaySeconds(delaySeconds) * 1000);
+
+  userPendingReplies.set(conversationKey, { timeoutId, version });
+  pendingAutoReplies.set(userId, userPendingReplies);
+}
 
 async function findAvailablePort(startPort: number, maxAttempts = 20): Promise<number> {
   for (let offset = 0; offset < maxAttempts; offset += 1) {
@@ -66,6 +173,8 @@ async function authenticateToken(req: Request, res: Response, next: NextFunction
     res.status(404).json({ error: "User profile not found." });
     return;
   }
+
+  await db.touchUserActivity(userId);
 
   // Bind user to request context
   (req as any).user = user;
@@ -144,7 +253,10 @@ app.post("/api/auth/signup", async (req: Request, res: Response) => {
         botName: user.botName,
         systemInstruction: user.systemInstruction,
         whatsappStatus: user.whatsappStatus,
-        isPaused: user.isPaused
+        isPaused: user.isPaused,
+        isAdmin: user.isAdmin,
+        autoReplyDelaySeconds: user.autoReplyDelaySeconds,
+        lastActiveAt: user.lastActiveAt
       }
     });
   } catch (error: any) {
@@ -186,6 +298,9 @@ app.post("/api/auth/login", async (req: Request, res: Response) => {
         systemInstruction: user.systemInstruction,
         whatsappStatus: user.whatsappStatus,
         isPaused: user.isPaused,
+        isAdmin: user.isAdmin,
+        autoReplyDelaySeconds: user.autoReplyDelaySeconds,
+        lastActiveAt: user.lastActiveAt,
         geminiApiKey: user.geminiApiKey ? `${user.geminiApiKey.substring(0, 5)}...${user.geminiApiKey.substring(user.geminiApiKey.length - 4)}` : ""
       }
     });
@@ -224,6 +339,9 @@ app.get("/api/user/profile", authenticateToken, async (req: Request, res: Respon
       systemInstruction: user.systemInstruction,
       whatsappStatus: user.whatsappStatus,
       isPaused: user.isPaused,
+      isAdmin: user.isAdmin,
+      autoReplyDelaySeconds: user.autoReplyDelaySeconds,
+      lastActiveAt: user.lastActiveAt,
       geminiApiKey: user.geminiApiKey ? `${user.geminiApiKey.substring(0, 5)}...${user.geminiApiKey.substring(user.geminiApiKey.length - 4)}` : "",
       qrUrl: qrUrl
     }
@@ -234,13 +352,14 @@ app.get("/api/user/profile", authenticateToken, async (req: Request, res: Respon
 app.post("/api/user/update-settings", authenticateToken, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
-    const { geminiApiKey, botName, systemInstruction, isPaused } = req.body;
+    const { geminiApiKey, botName, systemInstruction, isPaused, autoReplyDelaySeconds } = req.body;
 
     const updates: any = {};
     if (typeof geminiApiKey === "string") updates.geminiApiKey = geminiApiKey.trim();
     if (typeof botName === "string" && botName.trim().length > 0) updates.botName = botName.trim();
     if (typeof systemInstruction === "string" && systemInstruction.trim().length > 0) updates.systemInstruction = systemInstruction.trim();
     if (typeof isPaused === "boolean") updates.isPaused = isPaused;
+    if (autoReplyDelaySeconds !== undefined) updates.autoReplyDelaySeconds = normalizeDelaySeconds(autoReplyDelaySeconds);
 
     const updatedUser = await db.updateUser(user.id, updates);
 
@@ -248,7 +367,7 @@ app.post("/api/user/update-settings", authenticateToken, async (req: Request, re
     await db.addLog(
       user.id,
       "success",
-      `AI Configuration updated: Named "${updatedUser.botName}". Auto-reply is ${updatedUser.isPaused ? "PAUSED" : "ACTIVE"}.`
+      `AI Configuration updated: Named "${updatedUser.botName}". Auto-reply is ${updatedUser.isPaused ? "PAUSED" : "ACTIVE"}. Delay set to ${updatedUser.autoReplyDelaySeconds}s.`
     );
 
     res.json({
@@ -260,6 +379,9 @@ app.post("/api/user/update-settings", authenticateToken, async (req: Request, re
         systemInstruction: updatedUser.systemInstruction,
         whatsappStatus: updatedUser.whatsappStatus,
         isPaused: updatedUser.isPaused,
+        isAdmin: updatedUser.isAdmin,
+        autoReplyDelaySeconds: updatedUser.autoReplyDelaySeconds,
+        lastActiveAt: updatedUser.lastActiveAt,
         geminiApiKey: updatedUser.geminiApiKey ? `${updatedUser.geminiApiKey.substring(0, 5)}...${updatedUser.geminiApiKey.substring(updatedUser.geminiApiKey.length - 4)}` : ""
       }
     });
@@ -281,6 +403,52 @@ app.get("/api/user/chats", authenticateToken, async (req: Request, res: Response
   const user = (req as any).user;
   const chats = await db.getChats(user.id);
   res.json({ chats });
+});
+
+app.get("/api/public/stats", async (_req: Request, res: Response) => {
+  const stats = await db.getPublicStats();
+  res.json(stats);
+});
+
+app.get("/api/admin/users", authenticateToken, requireAdmin, async (_req: Request, res: Response) => {
+  const users = await db.getAdminUsers();
+  const activeUsers = await db.getActiveUserCount();
+  const totalAiRepliesSent = await db.getTotalAiRepliesSent();
+
+  res.json({
+    users,
+    activeUsers,
+    totalUsers: users.length,
+    totalAiRepliesSent
+  });
+});
+
+// Admin: update a user's attributes safely (only provided fields are changed)
+app.post("/api/admin/update-user", authenticateToken, requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const actor = (req as any).user;
+    const { id, isAdmin, isPaused, autoReplyDelaySeconds } = req.body;
+
+    if (!id || typeof id !== "string") {
+      res.status(400).json({ error: "Missing or invalid user id." });
+      return;
+    }
+
+    const updates: any = {};
+    if (typeof isAdmin === "boolean") updates.isAdmin = isAdmin;
+    if (typeof isPaused === "boolean") updates.isPaused = isPaused;
+    if (autoReplyDelaySeconds !== undefined) updates.autoReplyDelaySeconds = normalizeDelaySeconds(autoReplyDelaySeconds);
+
+    const before = await db.getUserById(id);
+    const updated = await db.updateUser(id, updates);
+
+    await db.addLog(actor.id, "info", `Admin ${actor.email} updated user ${updated.email} (${id}): ${JSON.stringify(updates)}`);
+
+    res.json({ before, user: updated });
+  } catch (error: any) {
+    console.error("Admin update-user error:", error);
+    res.status(500).json({ error: "Failed to update user." });
+  }
 });
 
 // Clear user chats
@@ -405,6 +573,7 @@ async function startWhatsAppSocket(userId: string): Promise<void> {
           void db.addLog(userId, "warning", "WhatsApp session unlinked/logged out by user.");
           activeSockets.delete(userId);
           userCurrentQrs.delete(userId);
+          pendingAutoReplies.delete(userId);
         }
       }
     });
@@ -412,41 +581,48 @@ async function startWhatsAppSocket(userId: string): Promise<void> {
     sock.ev.on("messages.upsert", async (m: any) => {
       try {
         const msg = m.messages[0];
-        if (!msg.key.fromMe && m.type === "notify") {
+        if (m.type === "notify") {
           const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
           const senderJid = msg.key.remoteJid;
           const senderName = msg.pushName || senderJid?.split("@")[0] || "Someone";
 
-          if (text && senderJid) {
-            const userProfile = await db.getUserById(userId);
-            if (!userProfile) return;
-
-            // Save incoming history
-            await db.addChat(userId, {
-              sender: senderName,
-              text: text,
-              isSimulated: false
-            });
-            await db.addLog(userId, "info", `Message received from ${senderName}: "${text}"`);
-
-            if (userProfile.isPaused) {
-              await db.addLog(userId, "warning", `Auto-reply to ${senderName} ignored because system is currently PAUSED.`);
-              return;
-            }
-
-            await db.addLog(userId, "ai", `Consulting Gemini auto-reply...`);
-            const aiReply = await generateGeminiResponseForUser(userProfile, senderName, text);
-
-            // Send reply through the socket
-            await sock.sendMessage(senderJid, { text: aiReply });
-            
-            await db.addChat(userId, {
-              sender: "bot",
-              text: aiReply,
-              isSimulated: false
-            });
-            await db.addLog(userId, "success", `Auto-replied back to ${senderName}.`);
+          if (!text || !senderJid) {
+            return;
           }
+
+          if (msg.key.fromMe) {
+            clearPendingAutoReply(userId, senderJid);
+            await db.addLog(userId, "info", `Manual reply detected for ${senderName}; pending auto-reply cancelled.`);
+            return;
+          }
+
+          const userProfile = await db.getUserById(userId);
+          if (!userProfile) return;
+
+          await db.addChat(userId, {
+            sender: senderName,
+            text: text,
+            isSimulated: false
+          });
+          await db.addLog(userId, "info", `Message received from ${senderName}: "${text}"`);
+
+          if (userProfile.isPaused) {
+            await db.addLog(userId, "warning", `Auto-reply to ${senderName} ignored because system is currently PAUSED.`);
+            return;
+          }
+
+          scheduleAutoReply({
+            userId,
+            conversationKey: senderJid,
+            senderLabel: senderName,
+            messageText: text,
+            isSimulated: false,
+            delaySeconds: userProfile.autoReplyDelaySeconds,
+            sock,
+            remoteJid: senderJid
+          });
+
+          await db.addLog(userId, "info", `Auto-reply scheduled for ${senderName} in ${normalizeDelaySeconds(userProfile.autoReplyDelaySeconds)} seconds.`);
         }
       } catch (msgErr: any) {
         console.error("Error processing messages.upsert event:", msgErr);
@@ -502,6 +678,7 @@ app.post("/api/whatsapp/disconnect", authenticateToken, async (req: Request, res
       activeSockets.delete(user.id);
     }
     userCurrentQrs.delete(user.id);
+    pendingAutoReplies.delete(user.id);
 
     const updated = await db.updateUser(user.id, {
       whatsappStatus: "Disconnected",
@@ -509,7 +686,6 @@ app.post("/api/whatsapp/disconnect", authenticateToken, async (req: Request, res
     });
 
     await db.addLog(user.id, "warning", "WhatsApp session terminated. Auto-responder offline.");
-
     res.json({
       message: "WhatsApp session disconnected.",
       whatsappStatus: updated.whatsappStatus
@@ -563,6 +739,11 @@ app.post("/api/simulator/chat", authenticateToken, async (req: Request, res: Res
 
     const trimmedMsg = messageText.trim();
     const sender = fromName ? fromName.trim() : "+1 (555) 049-2195";
+    const userProfile = await db.getUserById(user.id);
+    if (!userProfile) {
+      res.status(404).json({ error: "User profile not found." });
+      return;
+    }
 
     // 1. Add user message to historical chats
     const incomingChat = await db.addChat(user.id, {
@@ -574,7 +755,7 @@ app.post("/api/simulator/chat", authenticateToken, async (req: Request, res: Res
     await db.addLog(user.id, "info", `Incoming text on WhatsApp index from "${sender}": "${trimmedMsg}"`);
 
     // 2. Check configuration status (Pause mode)
-    if (user.isPaused) {
+    if (userProfile.isPaused) {
       const systemMessage = await db.addChat(user.id, {
         sender: "bot",
         text: `[System Notification: Bot is currently paused. Replier did not fire content.]`,
@@ -589,86 +770,21 @@ app.post("/api/simulator/chat", authenticateToken, async (req: Request, res: Res
       return;
     }
 
-    // 3. Auto-responding through Gemini AI
-    try {
-      // Find the appropriate API key. 
-      // Prioritize user's saved key if specified; fallback to server environment process key.
-      const apiKey = user.geminiApiKey || process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-         throw new Error("Missing API Key. Neither user custom key nor default server key is defined.");
-      }
+    scheduleAutoReply({
+      userId: user.id,
+      conversationKey: sender,
+      senderLabel: sender,
+      messageText: trimmedMsg,
+      isSimulated: true,
+      delaySeconds: userProfile.autoReplyDelaySeconds
+    });
 
-      await db.addLog(user.id, "ai", `Consulting Gemini AI with instructions set...`);
+    await db.addLog(user.id, "info", `Auto-reply scheduled for ${sender} in ${normalizeDelaySeconds(userProfile.autoReplyDelaySeconds)} seconds.`);
 
-      // Initialize the genuine modern @google/genai SDK on the server side
-      const ai = new GoogleGenAI({
-        apiKey: apiKey,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build'
-          }
-        }
-      });
-
-      // Execute generative modeling using gemini-3.5-flash
-      const promptContext = `
-You are the personal AI Auto-Responder designated for a user's WhatsApp.
-The sender profile is: ${sender}.
-The sender wrote: "${trimmedMsg}".
-
-Please compose an elegant, conversational, and helpful reply. Always reply in first-person as an intelligent personal assistant bot representing ${user.botName}. 
-
-CRITICAL CHAT FORMAT:
-Keep your answer concise (1-3 sentences maximum). Avoid overly long or formal paragraphs. Match the immediate chat style. Never output system formatting.
-`;
-
-      const aiResponse = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: promptContext,
-        config: {
-          systemInstruction: user.systemInstruction,
-          temperature: 0.7
-        }
-      });
-
-      const replyContent = aiResponse.text || "I was unable to formulate a message right now.";
-
-      // 4. Save Bot Reply to Database
-      const replyChat = await db.addChat(user.id, {
-        sender: "bot",
-        text: replyContent,
-        isSimulated: true
-      });
-
-      await db.addLog(
-        user.id, 
-        "success", 
-        `Auto-Replied successfully using Gemini. Reponded: "${replyContent.substring(0, 40)}${replyContent.length > 40 ? "..." : ""}"`
-      );
-
-      res.json({
-        incoming: incomingChat,
-        reply: replyChat,
-        status: "replied"
-      });
-
-    } catch (aiError: any) {
-      console.error("Gemini Generation Error:", aiError);
-      await db.addLog(user.id, "error", `Gemini API execution failed: ${aiError.message || aiError.toString()}`);
-      
-      const errorChat = await db.addChat(user.id, {
-        sender: "bot",
-        text: `Error auto-responding using Gemini. Please review your settings or secrets panel. Details: ${aiError.message || "Failed request validation"}`,
-        isSimulated: true
-      });
-
-      res.status(200).json({
-        incoming: incomingChat,
-        reply: errorChat,
-        status: "error",
-        error: aiError.message
-      });
-    }
+    res.json({
+      incoming: incomingChat,
+      status: "scheduled"
+    });
 
   } catch (error: any) {
     console.error("Simulator request error:", error);

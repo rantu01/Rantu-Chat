@@ -91,6 +91,10 @@ function normalizeUser(user: Partial<StoredUser> & Pick<StoredUser, "id" | "emai
     whatsappNumber: user.whatsappNumber,
     qrUrl: user.qrUrl,
     isPaused: user.isPaused ?? false,
+    isAdmin: user.isAdmin ?? false,
+    autoReplyDelaySeconds: Math.max(2, Math.floor(user.autoReplyDelaySeconds ?? 5)),
+    aiReplyCount: user.aiReplyCount ?? 0,
+    lastActiveAt: user.lastActiveAt,
     createdAt: user.createdAt ?? new Date().toISOString(),
     passwordHash: user.passwordHash
   };
@@ -124,6 +128,23 @@ function updateChatCache(userId: string, messages: ChatMessage[]) {
 
 function updateLogCache(userId: string, entries: LogEntry[]) {
   cache.logs[userId] = entries;
+}
+
+function getTotalAiRepliesSent() {
+  return cache.users.reduce((total, user) => total + (user.aiReplyCount || 0), 0);
+}
+
+function isRecentlyActive(user: StoredUser, windowMinutes = 5) {
+  if (!user.lastActiveAt) {
+    return false;
+  }
+
+  const activeAt = new Date(user.lastActiveAt).getTime();
+  if (Number.isNaN(activeAt)) {
+    return false;
+  }
+
+  return Date.now() - activeAt <= windowMinutes * 60 * 1000;
 }
 
 async function ensureIndexes() {
@@ -322,6 +343,8 @@ export const db = {
   },
 
   createUser: async (email: string, passwordHash: string): Promise<User> => {
+    const adminEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
+    const isAdmin = cache.users.length === 0 || (adminEmail ? email.toLowerCase() === adminEmail : false);
     const newUser = normalizeUser({
       id: crypto.randomUUID(),
       email,
@@ -330,6 +353,9 @@ export const db = {
       systemInstruction: defaultSystemInstruction,
       whatsappStatus: "Disconnected",
       isPaused: false,
+      isAdmin,
+      autoReplyDelaySeconds: 5,
+      lastActiveAt: new Date().toISOString(),
       createdAt: new Date().toISOString(),
       passwordHash
     });
@@ -384,6 +410,21 @@ export const db = {
     return toPublicUser(updatedUser);
   },
 
+  touchUserActivity: async (id: string): Promise<void> => {
+    const existing = cache.users.find((entry) => entry.id === id);
+    if (!existing) {
+      return;
+    }
+
+    const updatedUser = normalizeUser({
+      ...existing,
+      lastActiveAt: new Date().toISOString(),
+      passwordHash: existing.passwordHash
+    });
+
+    await persistUserDocument(updatedUser);
+  },
+
   getChats: async (userId: string): Promise<ChatMessage[]> => cache.chats[userId] || [],
 
   addChat: async (userId: string, chat: Omit<ChatMessage, "id" | "timestamp">): Promise<ChatMessage> => {
@@ -425,5 +466,35 @@ export const db = {
 
     await persistLogDocument(userId, entries);
     return newLog;
+  },
+
+  getPublicStats: async (): Promise<{ totalUsers: number; totalAiRepliesSent: number }> => ({
+    totalUsers: cache.users.length,
+    totalAiRepliesSent: getTotalAiRepliesSent()
+  }),
+
+  getAdminUsers: async (): Promise<Array<User & { isCurrentlyActive: boolean }>> =>
+    cache.users.map((user) => ({
+      ...toPublicUser(user),
+      isCurrentlyActive: isRecentlyActive(user)
+    })),
+
+  getActiveUserCount: async (): Promise<number> => cache.users.filter((user) => isRecentlyActive(user)).length,
+
+  getTotalAiRepliesSent: async (): Promise<number> => getTotalAiRepliesSent(),
+
+  incrementAiReplyCount: async (id: string): Promise<void> => {
+    const existing = cache.users.find((entry) => entry.id === id);
+    if (!existing) {
+      return;
+    }
+
+    const updatedUser = normalizeUser({
+      ...existing,
+      aiReplyCount: (existing.aiReplyCount || 0) + 1,
+      passwordHash: existing.passwordHash
+    });
+
+    await persistUserDocument(updatedUser);
   }
 };

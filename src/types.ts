@@ -8,6 +8,10 @@ export interface User {
   whatsappNumber?: string;
   qrUrl?: string;
   isPaused: boolean;
+  isAdmin: boolean;
+  autoReplyDelaySeconds: number;
+  aiReplyCount: number;
+  lastActiveAt?: string;
   createdAt: string;
 }
 

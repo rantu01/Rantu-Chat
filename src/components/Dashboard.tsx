@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { QrCode, Wifi, WifiOff, RefreshCw, Terminal, Phone, CheckCircle2, ShieldAlert, BookOpen, ExternalLink, HelpCircle } from "lucide-react";
+import { QrCode, Wifi, WifiOff, RefreshCw, Terminal, Phone, CheckCircle2, ShieldAlert, BookOpen, ExternalLink, HelpCircle, Users2, KeyRound, Activity, MessageSquare } from "lucide-react";
 import { User, LogEntry, ChatMessage } from "../types";
 import Settings from "./Settings";
 import Simulator from "./Simulator";
@@ -11,6 +11,10 @@ interface DashboardProps {
   onSettingsUpdated: (updatedUser: any) => void;
 }
 
+interface AdminUserRow extends User {
+  isCurrentlyActive: boolean;
+}
+
 export default function Dashboard({ user, token, onRefreshUser, onSettingsUpdated }: DashboardProps) {
   const [qrUrl, setQrUrl] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -20,6 +24,10 @@ export default function Dashboard({ user, token, onRefreshUser, onSettingsUpdate
   const [disconnecting, setDisconnecting] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [adminUsers, setAdminUsers] = useState<AdminUserRow[]>([]);
+  const [adminStats, setAdminStats] = useState({ activeUsers: 0, totalUsers: 0, totalAiRepliesSent: 0 });
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminError, setAdminError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchLogs();
@@ -49,6 +57,54 @@ export default function Dashboard({ user, token, onRefreshUser, onSettingsUpdate
       setQrUrl(null);
     }
   }, [user.qrUrl, user.whatsappStatus]);
+
+  useEffect(() => {
+    if (!user.isAdmin) {
+      return;
+    }
+
+    let mounted = true;
+
+    const loadAdminUsers = async () => {
+      setAdminLoading(true);
+      setAdminError(null);
+
+      try {
+        const resp = await fetch("/api/admin/users", {
+          headers: { "Authorization": `Bearer ${token}` }
+        });
+
+        if (resp.status === 401 || resp.status === 403) {
+          onRefreshUser();
+          return;
+        }
+
+        const data = await safeJson(resp);
+        if (mounted && resp.ok) {
+          setAdminUsers(data.users || []);
+          setAdminStats({
+            activeUsers: data.activeUsers || 0,
+            totalUsers: data.totalUsers || 0,
+            totalAiRepliesSent: data.totalAiRepliesSent || 0
+          });
+        }
+      } catch (err: any) {
+        if (mounted) {
+          setAdminError(err.message || "Failed to load admin dashboard data.");
+        }
+      } finally {
+        if (mounted) {
+          setAdminLoading(false);
+        }
+      }
+    };
+
+    void loadAdminUsers();
+
+    return () => {
+      mounted = false;
+    };
+  }, [user.isAdmin, token]);
 
   const safeJson = async (res: Response) => {
     const contentType = res.headers.get("content-type");
@@ -437,6 +493,149 @@ export default function Dashboard({ user, token, onRefreshUser, onSettingsUpdate
         </div>
 
       </div>
+
+      {user.isAdmin && (
+        <section className="mt-8 rounded-3xl border border-zinc-800 bg-zinc-950/80 p-6 shadow-[0_30px_90px_rgba(0,0,0,0.35)]">
+          <div className="flex flex-col gap-4 border-b border-zinc-800 pb-5 md:flex-row md:items-end md:justify-between">
+            <div>
+              <div className="inline-flex items-center gap-2 rounded-full border border-cyan-500/20 bg-cyan-500/10 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-cyan-300">
+                <Users2 className="h-3.5 w-3.5" />
+                User Management
+              </div>
+              <h3 className="mt-4 text-2xl font-bold tracking-tight text-zinc-50">Admin Dashboard</h3>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
+                Monitor who is currently active, review every user's API key, and inspect their auto-reply configuration from one place.
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/70 px-4 py-3 text-right">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Currently using website</div>
+              <div className="mt-1 text-3xl font-black tracking-tight text-zinc-50">{adminStats.activeUsers}</div>
+            </div>
+          </div>
+
+          <div className="mt-6 grid gap-4 md:grid-cols-3">
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4">
+              <div className="flex items-center justify-between text-zinc-400">
+                <span className="text-[10px] font-bold uppercase tracking-wider">Total users</span>
+                <Activity className="h-4 w-4 text-emerald-400" />
+              </div>
+              <div className="mt-3 text-3xl font-black tracking-tight text-zinc-50">{adminStats.totalUsers}</div>
+            </div>
+
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4">
+              <div className="flex items-center justify-between text-zinc-400">
+                <span className="text-[10px] font-bold uppercase tracking-wider">Active sessions</span>
+                <Users2 className="h-4 w-4 text-cyan-400" />
+              </div>
+              <div className="mt-3 text-3xl font-black tracking-tight text-zinc-50">{adminStats.activeUsers}</div>
+            </div>
+
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4">
+              <div className="flex items-center justify-between text-zinc-400">
+                <span className="text-[10px] font-bold uppercase tracking-wider">AI replies</span>
+                <MessageSquare className="h-4 w-4 text-emerald-400" />
+              </div>
+              <div className="mt-3 text-3xl font-black tracking-tight text-zinc-50">{adminStats.totalAiRepliesSent}</div>
+            </div>
+          </div>
+
+          <div className="mt-6 rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4">
+            <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-4">
+              <div>
+                <h4 className="text-sm font-bold text-zinc-100">User Directory</h4>
+                <p className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">Raw API keys and live activity state</p>
+              </div>
+              {adminLoading && <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">Refreshing...</span>}
+            </div>
+
+            {adminError && (
+              <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3 text-xs text-red-400">
+                {adminError}
+              </div>
+            )}
+
+            <div className="mt-4 overflow-x-auto">
+              <table className="min-w-full border-separate border-spacing-y-3 text-left">
+                <thead>
+                  <tr className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                    <th className="px-3 py-2">Email</th>
+                    <th className="px-3 py-2">Status</th>
+                    <th className="px-3 py-2">Delay</th>
+                    <th className="px-3 py-2">API Key</th>
+                    <th className="px-3 py-2">Last Active</th>
+                    <th className="px-3 py-2">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {adminUsers.map((adminUser) => (
+                    <tr key={adminUser.id} className="rounded-2xl bg-zinc-900/80 text-sm text-zinc-200">
+                      <td className="px-3 py-3">
+                        <div className="font-medium text-zinc-100">{adminUser.email}</div>
+                        <div className="mt-1 text-[10px] font-mono uppercase tracking-wider text-zinc-500">
+                          {adminUser.isAdmin ? "Administrator" : "Standard user"}
+                        </div>
+                      </td>
+                      <td className="px-3 py-3">
+                        <span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider ${adminUser.isCurrentlyActive ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300" : "border-zinc-700 bg-zinc-950 text-zinc-500"}`}>
+                          {adminUser.isCurrentlyActive ? "Active now" : "Idle"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 text-zinc-300">{adminUser.autoReplyDelaySeconds}s</td>
+                      <td className="px-3 py-3 font-mono text-[11px] text-zinc-200 break-all">{adminUser.geminiApiKey || "—"}</td>
+                      <td className="px-3 py-3 text-[11px] text-zinc-400">
+                        {adminUser.lastActiveAt ? new Date(adminUser.lastActiveAt).toLocaleString() : "Never"}
+                      </td>
+                      <td className="px-3 py-3">
+                        <div className="flex gap-2">
+                          <button
+                            title={adminUser.isAdmin ? "Revoke admin" : "Make admin"}
+                            onClick={async () => {
+                              setAdminLoading(true);
+                              setAdminError(null);
+                              try {
+                                const resp = await fetch("/api/admin/update-user", {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+                                  body: JSON.stringify({ id: adminUser.id, isAdmin: !adminUser.isAdmin })
+                                });
+                                const data = await safeJson(resp);
+                                if (!resp.ok) throw new Error(data.error || "Failed to update user");
+                                // refresh list
+                                const refreshed = await fetch("/api/admin/users", { headers: { "Authorization": `Bearer ${token}` } });
+                                const refreshedJson = await safeJson(refreshed);
+                                if (refreshed.ok) {
+                                  setAdminUsers(refreshedJson.users || []);
+                                  setAdminStats({
+                                    activeUsers: refreshedJson.activeUsers || 0,
+                                    totalUsers: refreshedJson.totalUsers || 0,
+                                    totalAiRepliesSent: refreshedJson.totalAiRepliesSent || 0
+                                  });
+                                }
+                              } catch (err: any) {
+                                setAdminError(err.message || "Failed to update user.");
+                              } finally {
+                                setAdminLoading(false);
+                              }
+                            }}
+                            className="rounded px-2 py-1 text-xs font-medium bg-zinc-800 hover:bg-zinc-700"
+                          >
+                            {adminUser.isAdmin ? "Revoke" : "Make"}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {!adminLoading && adminUsers.length === 0 && (
+                <div className="py-10 text-center text-sm text-zinc-500">No users available yet.</div>
+              )}
+            </div>
+          </div>
+        </section>
+      )}
     </div>
   );
 }
