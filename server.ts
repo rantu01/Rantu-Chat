@@ -5,7 +5,7 @@ import path from "path";
 import crypto from "crypto";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
-import { db, hashPassword, initializeDatabase, createMongoAuthState } from "./src/server/db.ts";
+import { db, hashPassword, initializeDatabase, createMongoAuthState, clearMongoAuthState } from "./src/server/db.ts";
 
 dotenv.config({ path: ".env.local" });
 dotenv.config();
@@ -18,6 +18,7 @@ app.use(express.json());
 // Active WhatsApp Web sockets tracking
 const activeSockets = new Map<string, any>(); // User ID -> WASocket
 const userCurrentQrs = new Map<string, string>(); // User ID -> Last raw QR string
+const activePairingSessions = new Set<string>(); // User ID -> Pairing flow currently in progress
 type PendingAutoReply = {
   timeoutId: ReturnType<typeof setTimeout>;
   version: number;
@@ -32,6 +33,93 @@ function normalizeDelaySeconds(value: unknown) {
   }
 
   return Math.max(2, Math.floor(numericValue));
+}
+
+function normalizePhoneNumberForPairing(input: unknown) {
+  const raw = typeof input === "string" ? input.trim() : "";
+  const digits = raw.replace(/\D/g, "");
+
+  if (digits.length < 10 || digits.length > 15 || digits.startsWith("0")) {
+    return null;
+  }
+
+  return {
+    digits,
+    displayNumber: `+${digits}`
+  };
+}
+
+async function forceCloseUserSocket(userId: string) {
+  if (!activeSockets.has(userId)) {
+    return;
+  }
+
+  try {
+    const sock = activeSockets.get(userId);
+    sock.ev.removeAllListeners("connection.update");
+    sock.ev.removeAllListeners("creds.update");
+    sock.ev.removeAllListeners("messages.upsert");
+    await sock.end(undefined);
+  } catch {
+    // Best effort cleanup only
+  } finally {
+    activeSockets.delete(userId);
+  }
+}
+
+async function resetWhatsAppSession(userId: string, nextStatus: "Disconnected" | "Connecting" = "Disconnected") {
+  await forceCloseUserSocket(userId);
+  userCurrentQrs.delete(userId);
+  pendingAutoReplies.delete(userId);
+  activePairingSessions.delete(userId);
+  await clearMongoAuthState(userId);
+  await db.updateUser(userId, {
+    whatsappStatus: nextStatus,
+    whatsappNumber: undefined
+  });
+}
+
+async function waitForSocketReady(userId: string, timeoutMs = 12000): Promise<any | null> {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const sock = activeSockets.get(userId);
+    if (sock && typeof sock.requestPairingCode === "function") {
+      return sock;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  return null;
+}
+
+async function requestPhonePairingCode(userId: string, phoneDigits: string): Promise<string> {
+  const sock = await waitForSocketReady(userId);
+  if (!sock) {
+    throw new Error("WhatsApp session is still initializing. Please try again in a few seconds.");
+  }
+
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const pairingCode = await sock.requestPairingCode(phoneDigits);
+      if (pairingCode) {
+        return pairingCode;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+  }
+
+  throw new Error(
+    lastError instanceof Error
+      ? `Unable to generate pairing code right now: ${lastError.message}`
+      : "Unable to generate pairing code right now."
+  );
 }
 
 function getConversationKey(remoteJid: string | undefined, fallback: string) {
@@ -521,11 +609,13 @@ async function startWhatsAppSocket(userId: string): Promise<void> {
     await db.updateUser(userId, { whatsappStatus: "Loading QR Code" });
     await db.addLog(userId, "info", "Starting headless WhatsApp worker state machine...");
 
-    const { default: makeWASocket, DisconnectReason } = await import("@whiskeysockets/baileys");
+    const { default: makeWASocket, DisconnectReason, Browsers } = await import("@whiskeysockets/baileys");
     const { state, saveCreds } = await createMongoAuthState(userId);
 
     const sock = makeWASocket({
       auth: state,
+      browser: Browsers.macOS("Desktop"),
+      syncFullHistory: true,
       printQRInTerminal: false,
       logger: (await import("pino")).default({ level: "silent" }) as any,
     });
@@ -546,6 +636,7 @@ async function startWhatsAppSocket(userId: string): Promise<void> {
       if (connection === "open") {
         const phone = sock.user?.id.split(":")[0] || sock.user?.id;
         const formattedPhone = phone ? `+${phone}` : "Linked Device";
+        activePairingSessions.delete(userId);
         void db.updateUser(userId, {
           whatsappStatus: "Authenticated",
           whatsappNumber: formattedPhone
@@ -556,9 +647,31 @@ async function startWhatsAppSocket(userId: string): Promise<void> {
 
       if (connection === "close") {
         const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
+        const latestUser = await db.getUserById(userId);
+        const isAuthenticated = latestUser?.whatsappStatus === "Authenticated";
         const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+        const pairingInProgress = activePairingSessions.has(userId) || latestUser?.whatsappStatus === "Connecting" || latestUser?.whatsappStatus === "Loading QR Code";
         
         void db.addLog(userId, "warning", `WhatsApp connection closed. Status code: ${statusCode || "unknown"}. Reconnecting: ${shouldReconnect}`);
+
+        if (!isAuthenticated && pairingInProgress) {
+          userCurrentQrs.delete(userId);
+          void db.updateUser(userId, { whatsappStatus: "Connecting", whatsappNumber: latestUser?.whatsappNumber });
+          setTimeout(() => {
+            startWhatsAppSocket(userId);
+          }, 2500);
+          return;
+        }
+
+        if (!isAuthenticated && !pairingInProgress) {
+          activePairingSessions.delete(userId);
+          userCurrentQrs.delete(userId);
+          void db.updateUser(userId, {
+            whatsappStatus: "Disconnected",
+            whatsappNumber: undefined
+          });
+          return;
+        }
 
         if (shouldReconnect) {
           // Re-initialize socket in background
@@ -633,6 +746,15 @@ async function startWhatsAppSocket(userId: string): Promise<void> {
   } catch (err: any) {
     console.error("Error starting WhatsApp session:", err);
     void db.addLog(userId, "error", `Connection state machine error: ${err.message || err.toString()}`);
+    const currentUser = await db.getUserById(userId);
+    if (activePairingSessions.has(userId) || currentUser?.whatsappStatus === "Connecting" || currentUser?.whatsappStatus === "Loading QR Code") {
+      void db.updateUser(userId, { whatsappStatus: "Connecting" });
+      setTimeout(() => {
+        startWhatsAppSocket(userId);
+      }, 2500);
+      return;
+    }
+
     void db.updateUser(userId, { whatsappStatus: "Disconnected" });
   }
 }
@@ -646,8 +768,12 @@ app.post("/api/whatsapp/connect", authenticateToken, async (req: Request, res: R
   try {
     const user = (req as any).user;
 
+    await resetWhatsAppSession(user.id, "Connecting");
+    activePairingSessions.add(user.id);
+    await db.addLog(user.id, "info", "Fresh QR session requested. Previous auth state cleared.");
+
     // Start socket in background
-    startWhatsAppSocket(user.id);
+    void startWhatsAppSocket(user.id);
 
     res.json({
       message: "Connection initialized",
@@ -659,36 +785,83 @@ app.post("/api/whatsapp/connect", authenticateToken, async (req: Request, res: R
   }
 });
 
+// Clear all WhatsApp session data and return to a clean disconnected state
+app.post("/api/whatsapp/fresh-start", authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+
+    await resetWhatsAppSession(user.id);
+    activePairingSessions.delete(user.id);
+    await db.addLog(user.id, "warning", "Fresh start completed. All WhatsApp session data cleared.");
+
+    res.json({
+      message: "Fresh start completed. Start again with QR or phone number.",
+      whatsappStatus: "Disconnected"
+    });
+  } catch (error: any) {
+    console.error("Fresh start error:", error);
+    res.status(500).json({ error: "Failed to complete fresh start reset." });
+  }
+});
+
+// Connect via mobile number and generate WhatsApp pairing code
+app.post("/api/whatsapp/connect-phone", authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const normalized = normalizePhoneNumberForPairing(req.body?.phoneNumber);
+
+    if (!normalized) {
+      res.status(400).json({ error: "Enter a valid mobile number with country code (example: +8801XXXXXXXXX)." });
+      return;
+    }
+
+    const latestUser = await db.getUserById(user.id);
+    if (!latestUser) {
+      res.status(404).json({ error: "User profile not found." });
+      return;
+    }
+
+    if (latestUser.whatsappStatus === "Authenticated") {
+      res.status(409).json({ error: "This account is already connected. Disconnect first to link another number." });
+      return;
+    }
+
+    await resetWhatsAppSession(user.id, "Connecting");
+    activePairingSessions.add(user.id);
+    await db.addLog(user.id, "info", "Cleared previous auth state. Starting a fresh phone-number pairing session.");
+
+    await db.updateUser(user.id, { whatsappNumber: normalized.displayNumber });
+
+    await startWhatsAppSocket(user.id);
+
+    const pairingCode = await requestPhonePairingCode(user.id, normalized.digits);
+    await db.addLog(user.id, "success", `Pairing code generated for ${normalized.displayNumber}. Enter this code on your WhatsApp phone.`);
+
+    res.json({
+      message: "Pairing code generated successfully.",
+      whatsappStatus: "Connecting",
+      whatsappNumber: normalized.displayNumber,
+      pairingCode
+    });
+  } catch (error: any) {
+    console.error("Phone connect error:", error);
+    res.status(500).json({ error: error.message || "Failed to generate phone pairing code." });
+  }
+});
+
 // Disconnect from WhatsApp
 app.post("/api/whatsapp/disconnect", authenticateToken, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
 
-    // Disconnect active socket
-    if (activeSockets.has(user.id)) {
-      try {
-        const sock = activeSockets.get(user.id);
-        sock.ev.removeAllListeners("connection.update");
-        sock.ev.removeAllListeners("creds.update");
-        sock.ev.removeAllListeners("messages.upsert");
-        await sock.logout();
-      } catch (e) {
-        // ignore
-      }
-      activeSockets.delete(user.id);
-    }
-    userCurrentQrs.delete(user.id);
-    pendingAutoReplies.delete(user.id);
-
-    const updated = await db.updateUser(user.id, {
-      whatsappStatus: "Disconnected",
-      whatsappNumber: undefined
-    });
+    await resetWhatsAppSession(user.id);
+    activePairingSessions.delete(user.id);
+    const updated = await db.getUserById(user.id);
 
     await db.addLog(user.id, "warning", "WhatsApp session terminated. Auto-responder offline.");
     res.json({
       message: "WhatsApp session disconnected.",
-      whatsappStatus: updated.whatsappStatus
+      whatsappStatus: updated?.whatsappStatus || "Disconnected"
     });
   } catch (error: any) {
     console.error("Disconnect error:", error);

@@ -19,8 +19,16 @@ export default function Dashboard({ user, token, onRefreshUser, onSettingsUpdate
   const [qrUrl, setQrUrl] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [chats, setChats] = useState<ChatMessage[]>([]);
-  const [phoneNumber, setPhoneNumber] = useState("");
+  const [simulatePhoneNumber, setSimulatePhoneNumber] = useState("");
+  const [pairPhoneNumber, setPairPhoneNumber] = useState("");
+  const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const [requestingPairingCode, setRequestingPairingCode] = useState(false);
+  const [pairingCodeExpiresAt, setPairingCodeExpiresAt] = useState<number | null>(null);
+  const [pairingCodeRemainingSeconds, setPairingCodeRemainingSeconds] = useState(0);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [connectionMode, setConnectionMode] = useState<"qr" | "phone" | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const [freshStarting, setFreshStarting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,6 +36,10 @@ export default function Dashboard({ user, token, onRefreshUser, onSettingsUpdate
   const [adminStats, setAdminStats] = useState({ activeUsers: 0, totalUsers: 0, totalAiRepliesSent: 0 });
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminError, setAdminError] = useState<string | null>(null);
+  const isPhonePairingActive = connectionMode === "phone" || Boolean(pairingCode) || requestingPairingCode;
+  const displayWhatsAppStatus = isPhonePairingActive && user.whatsappStatus !== "Authenticated"
+    ? "Connecting"
+    : user.whatsappStatus;
 
   useEffect(() => {
     fetchLogs();
@@ -114,6 +126,119 @@ export default function Dashboard({ user, token, onRefreshUser, onSettingsUpdate
     return res.json();
   };
 
+  const formatPhoneInput = (value: string) => {
+    const hasPlus = value.trim().startsWith("+");
+    const digits = value.replace(/\D/g, "").slice(0, 15);
+    return `${hasPlus ? "+" : ""}${digits}`;
+  };
+
+  const isPairPhoneValid = (value: string) => {
+    const digits = value.replace(/\D/g, "");
+    return digits.length >= 10 && digits.length <= 15;
+  };
+
+  const updatePairingCountdown = (expiryMs: number | null) => {
+    if (!expiryMs) {
+      setPairingCodeRemainingSeconds(0);
+      return;
+    }
+
+    const remaining = Math.max(0, Math.ceil((expiryMs - Date.now()) / 1000));
+    setPairingCodeRemainingSeconds(remaining);
+  };
+
+  useEffect(() => {
+    updatePairingCountdown(pairingCodeExpiresAt);
+
+    if (!pairingCodeExpiresAt) {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      updatePairingCountdown(pairingCodeExpiresAt);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [pairingCodeExpiresAt]);
+
+  useEffect(() => {
+    if (user.whatsappStatus === "Authenticated") {
+      setConnectionMode(null);
+      return;
+    }
+
+    if (user.whatsappStatus === "Disconnected" && !pairingCode && !requestingPairingCode && !connecting && !qrUrl) {
+      setConnectionMode(null);
+      return;
+    }
+
+    if (user.whatsappStatus === "Connecting" || user.whatsappStatus === "Loading QR Code") {
+      return;
+    }
+  }, [user.whatsappStatus, pairingCode, requestingPairingCode, connecting, qrUrl]);
+
+  useEffect(() => {
+    if (connectionMode !== "phone" || user.whatsappStatus === "Authenticated" || user.whatsappStatus === "Disconnected") {
+      return;
+    }
+
+    if (pairingCode && pairingCodeRemainingSeconds === 0 && !requestingPairingCode && isPairPhoneValid(pairPhoneNumber)) {
+      const timeout = setTimeout(() => {
+        void handleRefreshPairingCode();
+      }, 1200);
+
+      return () => clearTimeout(timeout);
+    }
+  }, [connectionMode, pairingCode, pairingCodeRemainingSeconds, requestingPairingCode, pairPhoneNumber, user.whatsappStatus]);
+
+  useEffect(() => {
+    if (connectionMode !== "qr" || user.whatsappStatus === "Authenticated" || user.whatsappStatus === "Disconnected") {
+      return;
+    }
+
+    if (!qrUrl) {
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      if (user.whatsappStatus !== "Authenticated" && user.whatsappStatus !== "Disconnected") {
+        void handleConnect();
+      }
+    }, 55000);
+
+    return () => clearTimeout(timeout);
+  }, [connectionMode, qrUrl, user.whatsappStatus]);
+
+  const requestPairingCode = async (phone: string) => {
+    const resp = await fetch("/api/whatsapp/connect-phone", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
+      },
+      body: JSON.stringify({ phoneNumber: phone })
+    });
+
+    const data = await safeJson(resp);
+    if (!resp.ok) throw new Error(data.error || "Failed to generate pairing code");
+
+    setPairingCode(data.pairingCode || null);
+    setPairingCodeExpiresAt(Date.now() + 60_000);
+    setCopyState("idle");
+    onRefreshUser();
+    fetchLogs();
+  };
+
+  const clearLocalConnectionUiState = () => {
+    setQrUrl(null);
+    setPairingCode(null);
+    setPairingCodeExpiresAt(null);
+    setPairPhoneNumber("");
+    setSimulatePhoneNumber("");
+    setCopyState("idle");
+    setConnectionMode(null);
+  };
+
   const fetchLogs = async () => {
     try {
       const resp = await fetch("/api/user/logs", {
@@ -154,6 +279,8 @@ export default function Dashboard({ user, token, onRefreshUser, onSettingsUpdate
   const handleConnect = async () => {
     setConnecting(true);
     setError(null);
+    setConnectionMode("qr");
+    setPairingCode(null);
     try {
       const resp = await fetch("/api/whatsapp/connect", {
         method: "POST",
@@ -177,10 +304,75 @@ export default function Dashboard({ user, token, onRefreshUser, onSettingsUpdate
     }
   };
 
+  const handleConnectByPhone = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRequestingPairingCode(true);
+    setError(null);
+    setConnectionMode("phone");
+
+    try {
+      await requestPairingCode(pairPhoneNumber);
+    } catch (err: any) {
+      setError(err.message || "Mobile number pairing failed");
+    } finally {
+      setRequestingPairingCode(false);
+    }
+  };
+
+  const handleRefreshPairingCode = async () => {
+    setRequestingPairingCode(true);
+    setError(null);
+    setConnectionMode("phone");
+
+    try {
+      await requestPairingCode(pairPhoneNumber);
+    } catch (err: any) {
+      setError(err.message || "Failed to refresh pairing code");
+    } finally {
+      setRequestingPairingCode(false);
+    }
+  };
+
+  const handleCopyPairingCode = async () => {
+    if (!pairingCode) return;
+
+    try {
+      await navigator.clipboard.writeText(pairingCode);
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    }
+  };
+
+  const handleFreshStart = async () => {
+    setFreshStarting(true);
+    setError(null);
+    setConnectionMode(null);
+
+    try {
+      const resp = await fetch("/api/whatsapp/fresh-start", {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${token}` }
+      });
+
+      const data = await safeJson(resp);
+      if (!resp.ok) throw new Error(data.error || "Fresh start failed");
+
+      clearLocalConnectionUiState();
+      onRefreshUser();
+      fetchLogs();
+    } catch (err: any) {
+      setError(err.message || "Failed to fresh start session");
+    } finally {
+      setFreshStarting(false);
+    }
+  };
+
   // Terminate connection
   const handleDisconnect = async () => {
     setDisconnecting(true);
     setError(null);
+    setConnectionMode(null);
     try {
       const resp = await fetch("/api/whatsapp/disconnect", {
         method: "POST",
@@ -189,7 +381,7 @@ export default function Dashboard({ user, token, onRefreshUser, onSettingsUpdate
       const data = await safeJson(resp);
       if (!resp.ok) throw new Error(data.error || "Failed to disconnect session");
 
-      setQrUrl(null);
+      clearLocalConnectionUiState();
       onRefreshUser();
       fetchLogs();
     } catch (err: any) {
@@ -212,14 +404,13 @@ export default function Dashboard({ user, token, onRefreshUser, onSettingsUpdate
           "Authorization": `Bearer ${token}`
         },
         body: JSON.stringify({
-          phoneNumber: phoneNumber ? phoneNumber : undefined
+          phoneNumber: simulatePhoneNumber ? simulatePhoneNumber : undefined
         })
       });
       const data = await safeJson(resp);
       if (!resp.ok) throw new Error(data.error || "Verification scan failed");
 
-      setQrUrl(null);
-      setPhoneNumber("");
+      clearLocalConnectionUiState();
       onRefreshUser();
       fetchLogs();
     } catch (err: any) {
@@ -272,16 +463,27 @@ export default function Dashboard({ user, token, onRefreshUser, onSettingsUpdate
                 </h3>
               </div>
 
-              {/* Status pill element */}
-              <div className="flex items-center gap-1.5 px-3 py-1 bg-zinc-950 border border-zinc-900 rounded-lg">
-                <div className={`h-1.5 w-1.5 rounded-full ${
-                  user.whatsappStatus === "Authenticated"
-                    ? "bg-emerald-500"
-                    : user.whatsappStatus === "Connecting" || user.whatsappStatus === "Loading QR Code"
-                    ? "bg-amber-400 animate-pulse"
-                    : "bg-red-400"
-                }`} />
-                <span className="text-[9px] font-mono font-bold uppercase text-zinc-400 tracking-widest">{user.whatsappStatus}</span>
+              <div className="flex items-center gap-2">
+                {/* Status pill element */}
+                <div className="flex items-center gap-1.5 px-3 py-1 bg-zinc-950 border border-zinc-900 rounded-lg">
+                  <div className={`h-1.5 w-1.5 rounded-full ${
+                    displayWhatsAppStatus === "Authenticated"
+                      ? "bg-emerald-500"
+                      : displayWhatsAppStatus === "Connecting" || displayWhatsAppStatus === "Loading QR Code"
+                      ? "bg-amber-400 animate-pulse"
+                      : "bg-red-400"
+                  }`} />
+                  <span className="text-[9px] font-mono font-bold uppercase text-zinc-400 tracking-widest">{displayWhatsAppStatus}</span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleFreshStart}
+                  disabled={freshStarting}
+                  className="rounded-lg border border-orange-500/35 bg-orange-500/10 px-2.5 py-1 text-[9px] font-mono font-bold uppercase tracking-wider text-orange-300 hover:bg-orange-500/15 disabled:opacity-40"
+                >
+                  {freshStarting ? "Resetting..." : "Fresh Start"}
+                </button>
               </div>
             </div>
 
@@ -292,8 +494,63 @@ export default function Dashboard({ user, token, onRefreshUser, onSettingsUpdate
               </div>
             )}
 
+            {isPhonePairingActive && (
+              <div className="mb-6 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+                <div className="mb-3 flex items-center gap-2 text-zinc-300">
+                  <Phone className="h-3.5 w-3.5" />
+                  <span className="text-[10px] font-bold uppercase tracking-widest">Phone pairing in progress</span>
+                </div>
+
+                <form onSubmit={handleConnectByPhone} className="flex gap-2">
+                  <input
+                    type="text"
+                    className="w-full rounded-lg border border-emerald-500/20 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 placeholder-zinc-700 outline-none focus:border-emerald-500/50"
+                    placeholder="Mobile number (e.g. +8801XXXXXXXXX)"
+                    value={pairPhoneNumber}
+                    onChange={(e) => setPairPhoneNumber(formatPhoneInput(e.target.value))}
+                  />
+                  <button
+                    type="submit"
+                    disabled={requestingPairingCode || !isPairPhoneValid(pairPhoneNumber)}
+                    className="rounded-lg border border-emerald-500/40 bg-emerald-500/20 hover:bg-emerald-500/30 px-4 py-2 text-xs font-bold text-emerald-200 shrink-0 cursor-pointer disabled:opacity-40"
+                  >
+                    {requestingPairingCode ? "Generating..." : pairingCode ? "Get New Code" : "Get Pairing Code"}
+                  </button>
+                </form>
+
+                {pairingCode && (
+                  <div className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[10px] text-zinc-300 font-mono mb-1">Enter this code in WhatsApp Linked Devices:</p>
+                        <p className="text-lg font-black tracking-[0.2em] text-emerald-300">{pairingCode}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleCopyPairingCode}
+                        className="rounded-md border border-emerald-500/40 bg-zinc-950/60 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-emerald-200 hover:bg-zinc-900"
+                      >
+                        {copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy Failed" : "Copy"}
+                      </button>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between text-[10px] font-mono text-zinc-300">
+                      <span>{pairingCodeRemainingSeconds > 0 ? `Code expires in ${pairingCodeRemainingSeconds}s` : "Code expired"}</span>
+                      <button
+                        type="button"
+                        onClick={handleRefreshPairingCode}
+                        disabled={requestingPairingCode || !isPairPhoneValid(pairPhoneNumber) || pairingCodeRemainingSeconds > 0}
+                        className="rounded-md border border-zinc-700 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-zinc-200 hover:bg-zinc-900 disabled:opacity-40"
+                      >
+                        {requestingPairingCode ? "Refreshing..." : "Refresh"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Connection View Layouts */}
-            {user.whatsappStatus === "Disconnected" && (
+            {displayWhatsAppStatus === "Disconnected" && !isPhonePairingActive && (
               <div className="text-center py-8">
                 <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-zinc-950 border border-zinc-850 text-zinc-500">
                   <WifiOff className="h-5 w-5" />
@@ -311,10 +568,61 @@ export default function Dashboard({ user, token, onRefreshUser, onSettingsUpdate
                   {connecting ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Wifi className="h-3.5 w-3.5" />}
                   <span>{connecting ? "Initializing Server Instance..." : "Connect WhatsApp (Generate QR)"}</span>
                 </button>
+
+                <div className="mt-5 rounded-xl border border-zinc-850 bg-zinc-950/70 p-4 text-left max-w-md mx-auto">
+                  <div className="mb-3 flex items-center gap-2 text-zinc-300">
+                    <Phone className="h-3.5 w-3.5" />
+                    <span className="text-[10px] font-bold uppercase tracking-widest">Connect using mobile number</span>
+                  </div>
+
+                  <form onSubmit={handleConnectByPhone} className="flex gap-2">
+                    <input
+                      type="text"
+                      className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 placeholder-zinc-700 outline-none focus:border-zinc-700"
+                      placeholder="Mobile number (e.g. +8801XXXXXXXXX)"
+                      value={pairPhoneNumber}
+                      onChange={(e) => setPairPhoneNumber(formatPhoneInput(e.target.value))}
+                    />
+                    <button
+                      type="submit"
+                      disabled={requestingPairingCode || !isPairPhoneValid(pairPhoneNumber)}
+                      className="rounded-lg bg-emerald-500/90 hover:bg-emerald-500 px-4 py-2 text-xs font-bold text-black shrink-0 cursor-pointer disabled:opacity-40"
+                    >
+                      {requestingPairingCode ? "Generating..." : "Get Code"}
+                    </button>
+                  </form>
+
+                  {pairingCode && (
+                    <div className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2">
+                      <p className="text-[10px] text-zinc-300 font-mono mb-1">Enter this code in WhatsApp Linked Devices:</p>
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-lg font-black tracking-[0.2em] text-emerald-300">{pairingCode}</p>
+                        <button
+                          type="button"
+                          onClick={handleCopyPairingCode}
+                          className="rounded-md border border-emerald-500/40 bg-zinc-950/60 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-emerald-200 hover:bg-zinc-900"
+                        >
+                          {copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy Failed" : "Copy"}
+                        </button>
+                      </div>
+                      <div className="mt-2 flex items-center justify-between text-[10px] font-mono text-zinc-300">
+                        <span>{pairingCodeRemainingSeconds > 0 ? `Code expires in ${pairingCodeRemainingSeconds}s` : "Code expired"}</span>
+                        <button
+                          type="button"
+                          onClick={handleRefreshPairingCode}
+                          disabled={requestingPairingCode || !isPairPhoneValid(pairPhoneNumber) || pairingCodeRemainingSeconds > 0}
+                          className="rounded-md border border-zinc-700 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-zinc-200 hover:bg-zinc-900 disabled:opacity-40"
+                        >
+                          {requestingPairingCode ? "Refreshing..." : "Refresh"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
-            {(user.whatsappStatus === "Connecting" || user.whatsappStatus === "Loading QR Code") && (
+            {(displayWhatsAppStatus === "Connecting" || displayWhatsAppStatus === "Loading QR Code") && !isPhonePairingActive && (
               <div className="flex flex-col md:flex-row gap-6 items-center p-5 bg-zinc-950/60 border border-zinc-850 rounded-xl">
                 {/* QR Display container */}
                 <div className="bg-white p-3 rounded-xl shrink-0 border border-zinc-800 shadow-md">
@@ -346,8 +654,8 @@ export default function Dashboard({ user, token, onRefreshUser, onSettingsUpdate
                         type="text"
                         className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 placeholder-zinc-700 outline-none focus:border-zinc-700"
                         placeholder="Device number (e.g. +15557818051)"
-                        value={phoneNumber}
-                        onChange={(e) => setPhoneNumber(e.target.value)}
+                        value={simulatePhoneNumber}
+                        onChange={(e) => setSimulatePhoneNumber(e.target.value)}
                       />
                     </div>
                     <button
@@ -359,6 +667,54 @@ export default function Dashboard({ user, token, onRefreshUser, onSettingsUpdate
                       {scanning ? "Linking..." : "Simulate Scan"}
                     </button>
                   </form>
+
+                  <form onSubmit={handleConnectByPhone} className="flex gap-2">
+                    <div className="flex-1 min-w-0">
+                      <input
+                        type="text"
+                        className="w-full rounded-lg border border-emerald-500/20 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 placeholder-zinc-700 outline-none focus:border-emerald-500/50"
+                        placeholder="Real phone number for pairing code"
+                        value={pairPhoneNumber}
+                        onChange={(e) => setPairPhoneNumber(formatPhoneInput(e.target.value))}
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={requestingPairingCode || !isPairPhoneValid(pairPhoneNumber)}
+                      className="rounded-lg border border-emerald-500/40 bg-emerald-500/20 hover:bg-emerald-500/30 px-4 py-2 text-xs font-bold text-emerald-200 shrink-0 cursor-pointer disabled:opacity-40"
+                    >
+                      {requestingPairingCode ? "Generating..." : "Get Pairing Code"}
+                    </button>
+                  </form>
+
+                  {pairingCode && (
+                    <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-[10px] text-zinc-300 font-mono mb-1">Pairing code for your phone:</p>
+                          <p className="text-base font-black tracking-[0.2em] text-emerald-300">{pairingCode}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleCopyPairingCode}
+                          className="rounded-md border border-emerald-500/40 bg-zinc-950/60 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-emerald-200 hover:bg-zinc-900"
+                        >
+                          {copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy Failed" : "Copy"}
+                        </button>
+                      </div>
+                      <div className="mt-2 flex items-center justify-between text-[10px] font-mono text-zinc-300">
+                        <span>{pairingCodeRemainingSeconds > 0 ? `Code expires in ${pairingCodeRemainingSeconds}s` : "Code expired"}</span>
+                        <button
+                          type="button"
+                          onClick={handleRefreshPairingCode}
+                          disabled={requestingPairingCode || !isPairPhoneValid(pairPhoneNumber) || pairingCodeRemainingSeconds > 0}
+                          className="rounded-md border border-zinc-700 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-zinc-200 hover:bg-zinc-900 disabled:opacity-40"
+                        >
+                          {requestingPairingCode ? "Refreshing..." : "Refresh"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   <button
                     id="cancel-connect-btn"

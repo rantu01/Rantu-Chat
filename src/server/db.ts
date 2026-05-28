@@ -325,6 +325,18 @@ export async function createMongoAuthState(userId: string): Promise<{ state: { c
   };
 }
 
+export async function clearMongoAuthState(userId: string): Promise<void> {
+  await initializeDatabase();
+
+  const credsCollection = getCollection<WhatsAppAuthCredsDocument>(COLLECTIONS.whatsappAuthCreds);
+  const keysCollection = getCollection<WhatsAppAuthKeyDocument>(COLLECTIONS.whatsappAuthKeys);
+
+  await Promise.all([
+    credsCollection.deleteMany({ userId }),
+    keysCollection.deleteMany({ userId })
+  ]);
+}
+
 export function hashPassword(password: string): string {
   return crypto.createHash("sha256").update(password).digest("hex");
 }
