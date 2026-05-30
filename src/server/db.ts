@@ -93,6 +93,7 @@ function normalizeUser(user: Partial<StoredUser> & Pick<StoredUser, "id" | "emai
     isPaused: user.isPaused ?? false,
     isAdmin: user.isAdmin ?? false,
     autoReplyDelaySeconds: Math.max(2, Math.floor(user.autoReplyDelaySeconds ?? 5)),
+    autoReplySeenCancelSeconds: Math.max(0, Math.floor(user.autoReplySeenCancelSeconds ?? 0)),
     aiReplyCount: user.aiReplyCount ?? 0,
     lastActiveAt: user.lastActiveAt,
     createdAt: user.createdAt ?? new Date().toISOString(),
@@ -367,6 +368,7 @@ export const db = {
       isPaused: false,
       isAdmin,
       autoReplyDelaySeconds: 5,
+      autoReplySeenCancelSeconds: 0,
       lastActiveAt: new Date().toISOString(),
       createdAt: new Date().toISOString(),
       passwordHash

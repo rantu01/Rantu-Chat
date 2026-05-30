@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Save, HelpCircle, ToggleLeft, ToggleRight, Sparkles, Key, FileText, Bot, Clock3 } from "lucide-react";
+import { Save, HelpCircle, ToggleLeft, ToggleRight, Sparkles, Key, FileText, Bot, Clock3, Eye } from "lucide-react";
 import { User } from "../types";
 
 interface SettingsProps {
@@ -17,6 +17,7 @@ export default function Settings({ user, onSettingsUpdated, token }: SettingsPro
   const [delayUnit, setDelayUnit] = useState<"seconds" | "minutes">(
     user.autoReplyDelaySeconds >= 60 && user.autoReplyDelaySeconds % 60 === 0 ? "minutes" : "seconds"
   );
+  const [seenCancelSeconds, setSeenCancelSeconds] = useState(Math.max(0, user.autoReplySeenCancelSeconds));
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
 
@@ -36,6 +37,7 @@ export default function Settings({ user, onSettingsUpdated, token }: SettingsPro
     setIsPaused(user.isPaused);
     setDelayValue(user.autoReplyDelaySeconds >= 60 && user.autoReplyDelaySeconds % 60 === 0 ? user.autoReplyDelaySeconds / 60 : user.autoReplyDelaySeconds);
     setDelayUnit(user.autoReplyDelaySeconds >= 60 && user.autoReplyDelaySeconds % 60 === 0 ? "minutes" : "seconds");
+    setSeenCancelSeconds(Math.max(0, user.autoReplySeenCancelSeconds));
   }, [user]);
 
   const handleSave = async (e: React.FormEvent) => {
@@ -45,6 +47,7 @@ export default function Settings({ user, onSettingsUpdated, token }: SettingsPro
 
     try {
       const delaySeconds = Math.max(2, Math.round(delayValue * (delayUnit === "minutes" ? 60 : 1)));
+      const seenCancelWindowSeconds = Math.max(0, Math.round(seenCancelSeconds));
 
       const response = await fetch("/api/user/update-settings", {
         method: "POST",
@@ -57,7 +60,8 @@ export default function Settings({ user, onSettingsUpdated, token }: SettingsPro
           botName,
           systemInstruction,
           isPaused,
-          autoReplyDelaySeconds: delaySeconds
+          autoReplyDelaySeconds: delaySeconds,
+          autoReplySeenCancelSeconds: seenCancelWindowSeconds
         })
       });
 
@@ -68,7 +72,7 @@ export default function Settings({ user, onSettingsUpdated, token }: SettingsPro
       }
 
       onSettingsUpdated(data.user);
-      setMessage({ text: `AI Configuration updated successfully! Auto-reply delay set to ${delaySeconds} seconds.`, type: "success" });
+      setMessage({ text: `AI Configuration updated successfully! Auto-reply delay set to ${delaySeconds} seconds and seen-cancel window set to ${seenCancelWindowSeconds} seconds.`, type: "success" });
       setApiKey(""); // clear password-like input
     } catch (err: any) {
       setMessage({ text: err.message || "Network error while saving.", type: "error" });
@@ -166,6 +170,27 @@ export default function Settings({ user, onSettingsUpdated, token }: SettingsPro
         <p className="text-[10px] text-zinc-500 mt-1.5 font-mono leading-relaxed">
           The AI waits before replying. If a manual WhatsApp reply arrives first, the pending reply is cancelled automatically.
         </p>
+      </div>
+
+      <div className="mb-6 rounded-2xl border border-zinc-800 bg-zinc-950/60 p-4">
+        <label className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-zinc-450 mb-2">
+          <Eye className="h-3.5 w-3.5 text-zinc-500" />
+          <span>Seen-Cancel Window</span>
+        </label>
+        <div className="flex gap-2">
+          <input
+            id="settings-seen-cancel-seconds-input"
+            type="number"
+            min={0}
+            step={1}
+            className="w-28 rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-xs text-zinc-100 placeholder-zinc-700 outline-none focus:border-zinc-700 transition-all font-mono"
+            value={seenCancelSeconds}
+            onChange={(e) => setSeenCancelSeconds(Math.max(0, Number(e.target.value) || 0))}
+          />
+          <div className="flex-1 rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-[10px] font-mono text-zinc-500 leading-relaxed">
+            If the chat is seen within this many seconds, the pending AI reply is cancelled. Set <span className="text-zinc-300 font-bold">0</span> to disable.
+          </div>
+        </div>
       </div>
 
       <form onSubmit={handleSave} className="space-y-6">

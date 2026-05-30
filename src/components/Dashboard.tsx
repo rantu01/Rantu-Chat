@@ -918,6 +918,7 @@ export default function Dashboard({ user, token, onRefreshUser, onSettingsUpdate
                     <th className="px-3 py-2">Email</th>
                     <th className="px-3 py-2">Status</th>
                     <th className="px-3 py-2">Delay</th>
+                    <th className="px-3 py-2">Seen cancel</th>
                     <th className="px-3 py-2">API Key</th>
                     <th className="px-3 py-2">Last Active</th>
                     <th className="px-3 py-2">Actions</th>
@@ -938,6 +939,7 @@ export default function Dashboard({ user, token, onRefreshUser, onSettingsUpdate
                         </span>
                       </td>
                       <td className="px-3 py-3 text-zinc-300">{adminUser.autoReplyDelaySeconds}s</td>
+                      <td className="px-3 py-3 text-zinc-300">{adminUser.autoReplySeenCancelSeconds}s</td>
                       <td className="px-3 py-3 font-mono text-[11px] text-zinc-200 break-all">{adminUser.geminiApiKey || "—"}</td>
                       <td className="px-3 py-3 text-[11px] text-zinc-400">
                         {adminUser.lastActiveAt ? new Date(adminUser.lastActiveAt).toLocaleString() : "Never"}

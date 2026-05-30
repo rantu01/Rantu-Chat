@@ -22,6 +22,9 @@ const activePairingSessions = new Set<string>(); // User ID -> Pairing flow curr
 type PendingAutoReply = {
   timeoutId: ReturnType<typeof setTimeout>;
   version: number;
+  receivedAt: number;
+  seenCancelWindowSeconds: number;
+  senderLabel: string;
 };
 
 const pendingAutoReplies = new Map<string, Map<string, PendingAutoReply>>();
@@ -33,6 +36,15 @@ function normalizeDelaySeconds(value: unknown) {
   }
 
   return Math.max(2, Math.floor(numericValue));
+}
+
+function normalizeSeenCancelSeconds(value: unknown) {
+  const numericValue = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor(numericValue));
 }
 
 function normalizePhoneNumberForPairing(input: unknown) {
@@ -160,15 +172,18 @@ function scheduleAutoReply(options: {
   messageText: string;
   isSimulated: boolean;
   delaySeconds: number;
+  seenCancelWindowSeconds: number;
+  receivedAt?: number;
   sock?: any;
   remoteJid?: string;
 }) {
-  const { userId, conversationKey, senderLabel, messageText, isSimulated, delaySeconds, sock, remoteJid } = options;
+  const { userId, conversationKey, senderLabel, messageText, isSimulated, delaySeconds, seenCancelWindowSeconds, receivedAt, sock, remoteJid } = options;
 
   clearPendingAutoReply(userId, conversationKey);
 
   const userPendingReplies = pendingAutoReplies.get(userId) || new Map<string, PendingAutoReply>();
   const version = (userPendingReplies.get(conversationKey)?.version || 0) + 1;
+  const startedAt = receivedAt || Date.now();
   const timeoutId = setTimeout(async () => {
     const currentPending = pendingAutoReplies.get(userId)?.get(conversationKey);
     if (!currentPending || currentPending.version !== version) {
@@ -210,7 +225,13 @@ function scheduleAutoReply(options: {
     }
   }, normalizeDelaySeconds(delaySeconds) * 1000);
 
-  userPendingReplies.set(conversationKey, { timeoutId, version });
+  userPendingReplies.set(conversationKey, {
+    timeoutId,
+    version,
+    receivedAt: startedAt,
+    seenCancelWindowSeconds: normalizeSeenCancelSeconds(seenCancelWindowSeconds),
+    senderLabel
+  });
   pendingAutoReplies.set(userId, userPendingReplies);
 }
 
@@ -440,7 +461,7 @@ app.get("/api/user/profile", authenticateToken, async (req: Request, res: Respon
 app.post("/api/user/update-settings", authenticateToken, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
-    const { geminiApiKey, botName, systemInstruction, isPaused, autoReplyDelaySeconds } = req.body;
+    const { geminiApiKey, botName, systemInstruction, isPaused, autoReplyDelaySeconds, autoReplySeenCancelSeconds } = req.body;
 
     const updates: any = {};
     if (typeof geminiApiKey === "string") updates.geminiApiKey = geminiApiKey.trim();
@@ -448,6 +469,7 @@ app.post("/api/user/update-settings", authenticateToken, async (req: Request, re
     if (typeof systemInstruction === "string" && systemInstruction.trim().length > 0) updates.systemInstruction = systemInstruction.trim();
     if (typeof isPaused === "boolean") updates.isPaused = isPaused;
     if (autoReplyDelaySeconds !== undefined) updates.autoReplyDelaySeconds = normalizeDelaySeconds(autoReplyDelaySeconds);
+    if (autoReplySeenCancelSeconds !== undefined) updates.autoReplySeenCancelSeconds = normalizeSeenCancelSeconds(autoReplySeenCancelSeconds);
 
     const updatedUser = await db.updateUser(user.id, updates);
 
@@ -455,7 +477,7 @@ app.post("/api/user/update-settings", authenticateToken, async (req: Request, re
     await db.addLog(
       user.id,
       "success",
-      `AI Configuration updated: Named "${updatedUser.botName}". Auto-reply is ${updatedUser.isPaused ? "PAUSED" : "ACTIVE"}. Delay set to ${updatedUser.autoReplyDelaySeconds}s.`
+      `AI Configuration updated: Named "${updatedUser.botName}". Auto-reply is ${updatedUser.isPaused ? "PAUSED" : "ACTIVE"}. Delay set to ${updatedUser.autoReplyDelaySeconds}s. Seen cancel window set to ${updatedUser.autoReplySeenCancelSeconds}s.`
     );
 
     res.json({
@@ -469,6 +491,7 @@ app.post("/api/user/update-settings", authenticateToken, async (req: Request, re
         isPaused: updatedUser.isPaused,
         isAdmin: updatedUser.isAdmin,
         autoReplyDelaySeconds: updatedUser.autoReplyDelaySeconds,
+        autoReplySeenCancelSeconds: updatedUser.autoReplySeenCancelSeconds,
         lastActiveAt: updatedUser.lastActiveAt,
         geminiApiKey: updatedUser.geminiApiKey ? `${updatedUser.geminiApiKey.substring(0, 5)}...${updatedUser.geminiApiKey.substring(updatedUser.geminiApiKey.length - 4)}` : ""
       }
@@ -609,7 +632,7 @@ async function startWhatsAppSocket(userId: string): Promise<void> {
     await db.updateUser(userId, { whatsappStatus: "Loading QR Code" });
     await db.addLog(userId, "info", "Starting headless WhatsApp worker state machine...");
 
-    const { default: makeWASocket, DisconnectReason, Browsers } = await import("@whiskeysockets/baileys");
+    const { default: makeWASocket, DisconnectReason, Browsers, WAMessageStatus } = await import("@whiskeysockets/baileys");
     const { state, saveCreds } = await createMongoAuthState(userId);
 
     const sock = makeWASocket({
@@ -731,6 +754,8 @@ async function startWhatsAppSocket(userId: string): Promise<void> {
             messageText: text,
             isSimulated: false,
             delaySeconds: userProfile.autoReplyDelaySeconds,
+            seenCancelWindowSeconds: userProfile.autoReplySeenCancelSeconds,
+            receivedAt: Date.now(),
             sock,
             remoteJid: senderJid
           });
@@ -740,6 +765,38 @@ async function startWhatsAppSocket(userId: string): Promise<void> {
       } catch (msgErr: any) {
         console.error("Error processing messages.upsert event:", msgErr);
         void db.addLog(userId, "error", `Failed message handling: ${msgErr.message || msgErr.toString()}`);
+      }
+    });
+
+    sock.ev.on("messages.update", async (updates: any[]) => {
+      try {
+        for (const update of updates || []) {
+          const conversationKey = update?.key?.remoteJid;
+          const isReadStatus = String(update?.status) === String(WAMessageStatus.READ);
+
+          if (!conversationKey || update?.key?.fromMe || !isReadStatus) {
+            continue;
+          }
+
+          const pending = pendingAutoReplies.get(userId)?.get(conversationKey);
+          if (!pending || pending.seenCancelWindowSeconds <= 0) {
+            continue;
+          }
+
+          const elapsedSeconds = (Date.now() - pending.receivedAt) / 1000;
+          if (elapsedSeconds > pending.seenCancelWindowSeconds) {
+            continue;
+          }
+
+          clearPendingAutoReply(userId, conversationKey);
+          void db.addLog(
+            userId,
+            "info",
+            `Read receipt from ${pending.senderLabel} arrived within ${pending.seenCancelWindowSeconds}s; pending auto-reply cancelled.`
+          );
+        }
+      } catch (readErr: any) {
+        console.error("Error processing messages.update event:", readErr);
       }
     });
 
@@ -949,7 +1006,9 @@ app.post("/api/simulator/chat", authenticateToken, async (req: Request, res: Res
       senderLabel: sender,
       messageText: trimmedMsg,
       isSimulated: true,
-      delaySeconds: userProfile.autoReplyDelaySeconds
+      delaySeconds: userProfile.autoReplyDelaySeconds,
+      seenCancelWindowSeconds: userProfile.autoReplySeenCancelSeconds,
+      receivedAt: Date.now()
     });
 
     await db.addLog(user.id, "info", `Auto-reply scheduled for ${sender} in ${normalizeDelaySeconds(userProfile.autoReplyDelaySeconds)} seconds.`);

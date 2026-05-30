@@ -10,6 +10,7 @@ export interface User {
   isPaused: boolean;
   isAdmin: boolean;
   autoReplyDelaySeconds: number;
+  autoReplySeenCancelSeconds: number;
   aiReplyCount: number;
   lastActiveAt?: string;
   createdAt: string;
